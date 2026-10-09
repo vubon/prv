@@ -1,0 +1,92 @@
+package output
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/vubon/prv/internal/models"
+)
+
+// GenerateMarkdownReport creates the complete markdown document for a review result.
+func GenerateMarkdownReport(res *models.ReviewResult) string {
+	var sb strings.Builder
+
+	// Title & Metadata
+	sb.WriteString(fmt.Sprintf("# PR Review Report: %s\n\n", res.PRTitle))
+	sb.WriteString(fmt.Sprintf("- **Branch:** `%s` $\\rightarrow$ `%s`\n", res.Branch, res.BaseBranch))
+	sb.WriteString(fmt.Sprintf("- **Reviewed At:** %s\n", res.ReviewedAt.Format(time.RFC1123)))
+	sb.WriteString(fmt.Sprintf("- **Verdict:** **%s**\n", res.Verdict))
+	sb.WriteString(fmt.Sprintf("- **Risk Level:** `%s`\n\n", res.RiskLevel))
+
+	// Executive Summary
+	sb.WriteString("## Executive Summary\n\n")
+	sb.WriteString(res.Summary + "\n\n")
+	sb.WriteString("---\n\n")
+
+	// Issues & Findings
+	if len(res.Issues) > 0 {
+		sb.WriteString("## Findings & Potential Bugs\n\n")
+		for i, issue := range res.Issues {
+			sb.WriteString(fmt.Sprintf("### %d. %s `%s#L%d`\n\n", i+1, issue.Title, issue.File, issue.LineStart))
+			sb.WriteString(fmt.Sprintf("- **Dimension:** `%s` | **Severity:** `%s`\n\n", issue.Dimension, issue.Severity))
+			sb.WriteString(issue.Description + "\n\n")
+			if issue.CodeSnippet != "" {
+				sb.WriteString("```go\n" + issue.CodeSnippet + "\n```\n\n")
+			}
+			if issue.Suggestion != "" {
+				sb.WriteString("**Suggested Fix:**\n")
+				sb.WriteString("```suggestion\n" + issue.Suggestion + "\n```\n\n")
+			}
+			sb.WriteString("---\n\n")
+		}
+	}
+
+	// Suggestions & Optimizations
+	if len(res.Suggestions) > 0 {
+		sb.WriteString("## Suggestions & Improvements\n\n")
+		for i, sug := range res.Suggestions {
+			sb.WriteString(fmt.Sprintf("### %d. %s `%s#L%d`\n\n", i+1, sug.Title, sug.File, sug.LineStart))
+			sb.WriteString(sug.Description + "\n\n")
+			if sug.Suggestion != "" {
+				sb.WriteString("```suggestion\n" + sug.Suggestion + "\n```\n\n")
+			}
+			sb.WriteString("---\n\n")
+		}
+	}
+
+	// Ready-to-Copy GitHub Comments Section
+	sb.WriteString("## 📋 Ready-to-Copy GitHub Review Comments\n\n")
+	comments := GenerateCommentList(res)
+	for _, c := range comments {
+		sb.WriteString(fmt.Sprintf("#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label))
+		sb.WriteString("```markdown\n")
+		sb.WriteString(c.MarkdownBody)
+		sb.WriteString("```\n\n")
+	}
+
+	return sb.String()
+}
+
+// SaveReportToFile writes the markdown report to the designated reviews/ directory.
+func SaveReportToFile(res *models.ReviewResult, outputDir string) (string, error) {
+	if outputDir == "" {
+		outputDir = "reviews"
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return "", err
+	}
+
+	sanitizedBranch := strings.ReplaceAll(res.Branch, "/", "-")
+	filename := fmt.Sprintf("%s-%s.md", res.ReviewedAt.Format("2006-01-02"), sanitizedBranch)
+	filePath := filepath.Join(outputDir, filename)
+
+	content := GenerateMarkdownReport(res)
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return "", err
+	}
+
+	return filePath, nil
+}

@@ -1,0 +1,23 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.out
+*.test
+coverage.txt
+
+# OS & Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Temporary review artifacts
+*.json
+!testdata/*.json

@@ -58,6 +58,8 @@ type ReviewResult struct {
 	Verdict     string       `json:"verdict"` // APPROVE, REQUEST_CHANGES, COMMENT
 	Summary     string       `json:"summary"`
 	RiskLevel   string       `json:"risk_level"`
+	WeakestLink string       `json:"weakest_link,omitempty"`
+	TradeOffs   string       `json:"trade_offs,omitempty"`
 	Issues      []Issue      `json:"issues"`
 	Suggestions []Suggestion `json:"suggestions"`
 	ReviewedAt  time.Time    `json:"reviewed_at"`

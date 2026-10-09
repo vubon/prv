@@ -67,6 +67,13 @@ func PrintReviewSummary(res *models.ReviewResult) {
 
 	fmt.Printf("%sSummary:%s\n%s\n\n", colorBold, colorReset, res.Summary)
 
+	if res.WeakestLink != "" {
+		fmt.Printf("%s%s🎯 Weakest Link in Change:%s\n%s\n\n", colorBold, colorYellow, colorReset, res.WeakestLink)
+	}
+	if res.TradeOffs != "" {
+		fmt.Printf("%s⚖️ Architectural Trade-offs:%s\n%s\n\n", colorBold, colorReset, res.TradeOffs)
+	}
+
 	if len(res.Issues) > 0 {
 		fmt.Printf("%sFindings & Potential Bugs:%s\n", colorBold, colorReset)
 		for i, issue := range res.Issues {

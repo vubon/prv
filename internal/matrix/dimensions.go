@@ -73,4 +73,37 @@ var ReviewDimensions = []Dimension{
 			"Is non-obvious domain logic clearly commented?",
 		},
 	},
+	{
+		Name:        "7. Architecture & System Coupling",
+		Description: "Evaluate package boundaries, abstraction leakage, interface cohesion, and long-term tech debt.",
+		Severity:    "MAJOR",
+		Checklist: []string{
+			"Does this change introduce tight coupling or break existing package/layer encapsulation?",
+			"Are new abstractions and interfaces minimal, cohesive, and genuinely necessary (avoiding premature abstraction)?",
+			"Will this change make future modifications, extensions, or refactoring significantly more difficult?",
+			"Does the change respect separation of concerns and single responsibility?",
+		},
+	},
+	{
+		Name:        "8. Observability & Operability",
+		Description: "Ensure runtime visibility, actionable diagnostics, and operational debuggability when issues arise.",
+		Severity:    "MAJOR",
+		Checklist: []string{
+			"Are error messages descriptive, actionable, and preserved with underlying causes (%w) rather than opaque?",
+			"Are critical state transitions, degraded modes, and external failures logged with structured context?",
+			"If an external dependency or network call fails, will on-call engineers immediately know why from output/logs?",
+			"Are timeouts, cancellation contexts, and resource cleanup properly wired for operational reliability?",
+		},
+	},
+	{
+		Name:        "9. Blast Radius & Failure Modes (The Weakest Link)",
+		Description: "Stress-test assumptions, identify single points of failure, worst-case degradations, and rollout risks.",
+		Severity:    "CRITICAL",
+		Checklist: []string{
+			"What is the single most fragile part or weakest link in this change, and how will it fail under stress?",
+			"What happens if external dependencies (network, API, disk, CLI) are down, slow, or returning invalid payloads?",
+			"What is the blast radius of a failure (isolated component vs cascading system-wide outage)?",
+			"Is the change safely roll-backable without database/schema corruption or client state incompatibility?",
+		},
+	},
 }

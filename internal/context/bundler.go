@@ -27,76 +27,111 @@ func NewBundler(repoPath string) *Bundler {
 
 // PrepareBundle gathers all PR metadata, diffs, and filters noise into a structured PRContext.
 func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, error) {
-	var meta *models.PRMetadata
-	var rawDiff string
-	var err error
-
 	// Case 1: Remote GitHub PR URL or Number (Zero-Clone Policy)
-	if opts.PRIdentifier != "" && strings.HasPrefix(opts.PRIdentifier, "http") {
-		owner, repo, prNum, parseErr := git.ParsePRURL(opts.PRIdentifier)
-		if parseErr == nil {
-			meta, rawDiff, err = b.ghClient.FetchPRViaAPI(owner, repo, prNum)
-			if err != nil {
-				// Fallback to gh CLI
+	if opts.PRIdentifier != "" {
+		var meta *models.PRMetadata
+		var rawDiff string
+		var err error
+
+		if strings.HasPrefix(opts.PRIdentifier, "http") {
+			owner, repo, prNum, parseErr := git.ParsePRURL(opts.PRIdentifier)
+			if parseErr == nil {
+				meta, rawDiff, err = b.ghClient.FetchPRViaAPI(owner, repo, prNum)
+				if err != nil {
+					// Fallback to gh CLI
+					meta, rawDiff, err = b.ghClient.FetchPRViaCLI(opts.PRIdentifier, opts.RepoPath)
+				}
+			} else {
 				meta, rawDiff, err = b.ghClient.FetchPRViaCLI(opts.PRIdentifier, opts.RepoPath)
 			}
 		} else {
+			// PR number provided via gh CLI
 			meta, rawDiff, err = b.ghClient.FetchPRViaCLI(opts.PRIdentifier, opts.RepoPath)
 		}
-	} else if opts.PRIdentifier != "" {
-		// PR number provided via gh CLI
-		meta, rawDiff, err = b.ghClient.FetchPRViaCLI(opts.PRIdentifier, opts.RepoPath)
+
+		if err != nil || meta == nil {
+			if err == nil {
+				err = fmt.Errorf("could not retrieve PR metadata")
+			}
+			return nil, fmt.Errorf("failed to fetch remote PR %s: %w", opts.PRIdentifier, err)
+		}
+
+		fileChanges, parseErr := git.ParseUnifiedDiff(rawDiff, opts.IncludeLocks)
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse PR diff: %w", parseErr)
+		}
+
+		return b.buildContext(meta, fileChanges), nil
 	}
 
 	// Case 2: Local Git Repository
-	if meta == nil {
-		if !b.gitRunner.IsGitRepo() {
-			return nil, fmt.Errorf("not a git repository and no remote PR specified: %s", opts.RepoPath)
+	if !b.gitRunner.IsGitRepo() {
+		return nil, fmt.Errorf("not a git repository and no remote PR specified: %s", opts.RepoPath)
+	}
+
+	headBranch := opts.Branch
+	var err error
+	if headBranch == "" {
+		headBranch, err = b.gitRunner.GetCurrentBranch()
+		if err != nil {
+			return nil, fmt.Errorf("failed to detect current branch: %w", err)
+		}
+	}
+
+	baseBranch := opts.BaseBranch
+	if baseBranch == "" {
+		baseBranch = b.gitRunner.GetDefaultBaseBranch()
+	}
+
+	var meta *models.PRMetadata
+	var fileChanges []models.FileChange
+
+	// If user explicitly specified a custom base branch, compute diff locally against that base
+	if opts.BaseBranch != "" {
+		ghMeta, _, _ := b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
+		if ghMeta != nil {
+			meta = ghMeta
+			meta.BaseBranch = baseBranch
 		}
 
-		headBranch := opts.Branch
-		if headBranch == "" {
-			headBranch, err = b.gitRunner.GetCurrentBranch()
-			if err != nil {
-				return nil, fmt.Errorf("failed to detect current branch: %w", err)
+		localChanges, diffErr := b.gitRunner.GetDiff(baseBranch, headBranch, opts.IncludeLocks)
+		if diffErr != nil {
+			return nil, fmt.Errorf("failed to get local diff against base %s: %w", baseBranch, diffErr)
+		}
+		fileChanges = localChanges
+	} else {
+		// Try to enrich with GitHub PR description & diff if gh CLI is available
+		ghMeta, ghDiff, _ := b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
+		if ghMeta != nil && ghDiff != "" {
+			meta = ghMeta
+			parsedChanges, parseErr := git.ParseUnifiedDiff(ghDiff, opts.IncludeLocks)
+			if parseErr == nil {
+				fileChanges = parsedChanges
 			}
 		}
 
-		baseBranch := opts.BaseBranch
-		if baseBranch == "" {
-			baseBranch = b.gitRunner.GetDefaultBaseBranch()
-		}
-
-		// Try to enrich with GitHub PR description if gh CLI is available
-		meta, rawDiff, _ = b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
-		if meta == nil {
-			meta = &models.PRMetadata{
-				Title:       fmt.Sprintf("Branch Review: %s", headBranch),
-				Description: "(No PR description found on GitHub — reviewing local branch diff)",
-				BaseBranch:  baseBranch,
-				HeadBranch:  headBranch,
-				CreatedAt:   time.Now(),
-			}
-		}
-
-		if rawDiff == "" {
-			// Fetch diff locally from git
-			fileChanges, diffErr := b.gitRunner.GetDiff(baseBranch, headBranch, opts.IncludeLocks)
+		// Fallback to local git diff if GitHub PR was not found or had empty diff
+		if len(fileChanges) == 0 && meta == nil {
+			localChanges, diffErr := b.gitRunner.GetDiff(baseBranch, headBranch, opts.IncludeLocks)
 			if diffErr != nil {
 				return nil, fmt.Errorf("failed to get local diff: %w", diffErr)
 			}
-			return b.buildContext(meta, fileChanges), nil
+			fileChanges = localChanges
 		}
 	}
 
-	if err != nil && rawDiff == "" {
-		return nil, fmt.Errorf("failed to fetch PR diff: %w", err)
-	}
-
-	// Parse diff string
-	fileChanges, err := git.ParseUnifiedDiff(rawDiff, opts.IncludeLocks)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse diff: %w", err)
+	if meta == nil {
+		desc := "(No PR description found on GitHub — reviewing local branch diff)"
+		if headBranch == baseBranch {
+			desc += fmt.Sprintf("\n\nNote: Head branch '%s' is identical to base branch '%s' (0 changes).", headBranch, baseBranch)
+		}
+		meta = &models.PRMetadata{
+			Title:       fmt.Sprintf("Branch Review: %s", headBranch),
+			Description: desc,
+			BaseBranch:  baseBranch,
+			HeadBranch:  headBranch,
+			CreatedAt:   time.Now(),
+		}
 	}
 
 	return b.buildContext(meta, fileChanges), nil

@@ -95,3 +95,29 @@ func TestParseUnifiedDiff_LongLine(t *testing.T) {
 		t.Fatalf("expected 1 file parsed, got %d", len(files))
 	}
 }
+
+func TestParseUnifiedDiff_PlusPlusAndMinusMinusLines(t *testing.T) {
+	rawDiff := `diff --git a/query.sql b/query.sql
+--- a/query.sql
++++ b/query.sql
+@@ -1,3 +1,3 @@
+--- old sql comment
++++counter
++real add
+`
+
+	files, err := ParseUnifiedDiff(rawDiff, false)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff failed: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	if files[0].Additions != 2 {
+		t.Errorf("expected 2 additions, got %d", files[0].Additions)
+	}
+	if files[0].Deletions != 1 {
+		t.Errorf("expected 1 deletion, got %d", files[0].Deletions)
+	}
+}

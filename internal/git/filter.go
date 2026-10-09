@@ -30,8 +30,6 @@ var IgnoredFilePatterns = []string{
 	"*_generated.go",
 	"*.gen.go",
 	"schema.graphql.go",
-	"openapi.json",
-	"swagger.json",
 
 	// Binary & Media
 	"*.png",

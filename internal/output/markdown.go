@@ -14,6 +14,13 @@ import (
 func GenerateMarkdownReport(res *models.ReviewResult) string {
 	var sb strings.Builder
 
+	if res.ReviewedAt.IsZero() {
+		res.ReviewedAt = time.Now()
+	}
+	if res.RiskLevel == "" {
+		res.RiskLevel = models.RiskLow
+	}
+
 	// Title & Metadata
 	sb.WriteString(fmt.Sprintf("# PR Review Report: %s\n\n", res.PRTitle))
 	sb.WriteString(fmt.Sprintf("- **Branch:** `%s` $\\rightarrow$ `%s`\n", res.Branch, res.BaseBranch))
@@ -62,9 +69,12 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	comments := GenerateCommentList(res)
 	for _, c := range comments {
 		sb.WriteString(fmt.Sprintf("#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label))
-		sb.WriteString("```markdown\n")
+		sb.WriteString("````markdown\n")
 		sb.WriteString(c.MarkdownBody)
-		sb.WriteString("```\n\n")
+		if !strings.HasSuffix(c.MarkdownBody, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("````\n\n")
 	}
 
 	return sb.String()
@@ -77,6 +87,13 @@ func SaveReportToFile(res *models.ReviewResult, outputDir string) (string, error
 	}
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return "", err
+	}
+
+	if res.ReviewedAt.IsZero() {
+		res.ReviewedAt = time.Now()
+	}
+	if res.Branch == "" {
+		res.Branch = "review"
 	}
 
 	sanitizedBranch := strings.ReplaceAll(res.Branch, "/", "-")

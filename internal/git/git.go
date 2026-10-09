@@ -124,6 +124,7 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 
 	var currentFile *models.FileChange
 	var hunkBuilder strings.Builder
+	inHunk := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -135,6 +136,7 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 				files = append(files, *currentFile)
 				hunkBuilder.Reset()
 			}
+			inHunk = false
 
 			// Parse file path from: diff --git a/path/to/file b/path/to/file
 			header := strings.TrimPrefix(line, "diff --git ")
@@ -170,7 +172,7 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 			currentFile.Status = "deleted"
 		} else if strings.HasPrefix(line, "similarity index") || strings.HasPrefix(line, "rename from") {
 			currentFile.Status = "renamed"
-		} else if strings.HasPrefix(line, "+++ ") {
+		} else if strings.HasPrefix(line, "+++ ") && !inHunk {
 			target := strings.TrimPrefix(line, "+++ ")
 			target = strings.TrimPrefix(target, "b/")
 			target = strings.Trim(target, "\"")
@@ -179,17 +181,23 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 			}
 		}
 
-		// Count additions and deletions in hunks (lines starting with + or - but not +++ or ---)
-		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
-			currentFile.Additions++
-		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
-			currentFile.Deletions++
+		if strings.HasPrefix(line, "@@ ") {
+			inHunk = true
 		}
 
-		// Collect hunk content if file is not filtered
-		if !currentFile.IsFiltered {
-			hunkBuilder.WriteString(line)
-			hunkBuilder.WriteString("\n")
+		// Count additions and deletions strictly inside hunks
+		if inHunk {
+			if strings.HasPrefix(line, "+") {
+				currentFile.Additions++
+			} else if strings.HasPrefix(line, "-") {
+				currentFile.Deletions++
+			}
+
+			// Collect hunk content if file is not filtered
+			if !currentFile.IsFiltered {
+				hunkBuilder.WriteString(line)
+				hunkBuilder.WriteString("\n")
+			}
 		}
 	}
 

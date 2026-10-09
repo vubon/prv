@@ -146,9 +146,9 @@ func runReport(args []string) {
 	savedPath, err := output.SaveReportToFile(&res, *outputDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error saving report: %v\n", err)
-	} else {
-		fmt.Printf("Report saved to: %s\n", savedPath)
+		os.Exit(1)
 	}
+	fmt.Printf("Report saved to: %s\n", savedPath)
 
 	output.PrintReviewSummary(&res)
 

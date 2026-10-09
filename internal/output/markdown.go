@@ -31,6 +31,19 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	// Executive Summary
 	sb.WriteString("## Executive Summary\n\n")
 	sb.WriteString(res.Summary + "\n\n")
+
+	// Advisory: Weakest Link & Architectural Trade-offs
+	if res.WeakestLink != "" || res.TradeOffs != "" {
+		sb.WriteString("## 🎯 Staff Advisory: Weakest Link & Architectural Trade-offs\n\n")
+		if res.WeakestLink != "" {
+			sb.WriteString("### Weakest Link in this Change\n\n")
+			sb.WriteString(res.WeakestLink + "\n\n")
+		}
+		if res.TradeOffs != "" {
+			sb.WriteString("### Key Architectural Trade-offs\n\n")
+			sb.WriteString(res.TradeOffs + "\n\n")
+		}
+	}
 	sb.WriteString("---\n\n")
 
 	// Issues & Findings

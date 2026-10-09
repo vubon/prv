@@ -44,6 +44,28 @@ func TestGenerateMarkdownReport_FourBackticksNesting(t *testing.T) {
 	}
 }
 
+func TestGenerateMarkdownReport_WeakestLinkAndTradeOffs(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle:     "Advisory Test PR",
+		Branch:      "feat/advisory",
+		Verdict:     models.VerdictApprove,
+		WeakestLink: "Downstream CLI dependency failure",
+		TradeOffs:   "Synchronous parsing chosen over async goroutines for simplicity",
+	}
+
+	report := GenerateMarkdownReport(res)
+
+	if !strings.Contains(report, "## 🎯 Staff Advisory: Weakest Link & Architectural Trade-offs") {
+		t.Error("expected Advisory section header in report")
+	}
+	if !strings.Contains(report, "Downstream CLI dependency failure") {
+		t.Error("expected WeakestLink content in report")
+	}
+	if !strings.Contains(report, "Synchronous parsing chosen over async goroutines for simplicity") {
+		t.Error("expected TradeOffs content in report")
+	}
+}
+
 func TestSaveReportToFile_ZeroDateAndDefaultBranch(t *testing.T) {
 	tempDir := t.TempDir()
 

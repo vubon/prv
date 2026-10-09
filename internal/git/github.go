@@ -45,6 +45,11 @@ type ghViewResponse struct {
 
 // FetchPRViaCLI attempts to fetch PR metadata and diff using the `gh` CLI.
 func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*models.PRMetadata, string, error) {
+	// Verify that the gh CLI is available on the host system
+	if _, lookErr := exec.LookPath("gh"); lookErr != nil {
+		return nil, "", fmt.Errorf("GitHub CLI 'gh' is not installed or not in $PATH (install via 'brew install gh' or https://cli.github.com)")
+	}
+
 	// 1. Fetch metadata JSON via `gh pr view`
 	args := []string{"pr", "view", prOrBranch, "--json", "number,title,body,author,baseRefName,headRefName,url,createdAt"}
 	cmd := exec.Command("gh", args...)
@@ -54,6 +59,10 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 
 	out, err := cmd.Output()
 	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			stderrMsg := strings.TrimSpace(string(exitErr.Stderr))
+			return nil, "", fmt.Errorf("gh pr view failed: %s (%w)", stderrMsg, err)
+		}
 		return nil, "", fmt.Errorf("gh pr view failed: %w", err)
 	}
 
@@ -85,6 +94,10 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 	}
 	diffOut, err := diffCmd.Output()
 	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			stderrMsg := strings.TrimSpace(string(exitErr.Stderr))
+			return meta, "", fmt.Errorf("gh pr diff failed: %s (%w)", stderrMsg, err)
+		}
 		return meta, "", fmt.Errorf("gh pr diff failed: %w", err)
 	}
 

@@ -60,24 +60,37 @@ func main() {
 
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
-	branch := fs.String("branch", "", "Feature branch name")
-	base := fs.String("base", "", "Base target branch (defaults to main/master)")
-	prID := fs.String("pr", "", "PR number or full GitHub PR URL")
-	repoPath := fs.String("repo", ".", "Path to local git repository")
-	formatJSON := fs.Bool("json", false, "Output bundle as raw JSON to stdout")
-	includeLocks := fs.Bool("include-locks", false, "Include lockfiles and generated files in diff")
-	outputFile := fs.String("output", "", "Save bundle to specific file path")
+	var branch, base, prID, repoPath, outputFile string
+	var formatJSON, includeLocks bool
+
+	fs.StringVar(&branch, "branch", "", "Feature branch name")
+	fs.StringVar(&branch, "b", "", "Alias for --branch")
+
+	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master)")
+
+	fs.StringVar(&prID, "pr", "", "PR number or full GitHub PR URL")
+
+	fs.StringVar(&repoPath, "repo", ".", "Path to local git repository")
+	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
+
+	fs.BoolVar(&formatJSON, "json", false, "Output bundle as raw JSON to stdout")
+
+	fs.BoolVar(&includeLocks, "include-locks", false, "Include lockfiles and generated files in diff")
+
+	fs.StringVar(&outputFile, "output", "", "Save bundle to specific file path")
+	fs.StringVar(&outputFile, "out", "", "Alias for --output")
+	fs.StringVar(&outputFile, "o", "", "Alias for --output")
 
 	_ = fs.Parse(args)
 
-	bundler := context.NewBundler(*repoPath)
+	bundler := context.NewBundler(repoPath)
 	opts := models.BundleOptions{
-		Branch:       *branch,
-		BaseBranch:   *base,
-		PRIdentifier: *prID,
-		RepoPath:     *repoPath,
-		FormatJSON:   *formatJSON,
-		IncludeLocks: *includeLocks,
+		Branch:       branch,
+		BaseBranch:   base,
+		PRIdentifier: prID,
+		RepoPath:     repoPath,
+		FormatJSON:   formatJSON,
+		IncludeLocks: includeLocks,
 	}
 
 	bundleCtx, err := bundler.PrepareBundle(opts)
@@ -86,21 +99,25 @@ func runBundle(args []string) {
 		os.Exit(1)
 	}
 
-	if *formatJSON {
+	if formatJSON {
 		jsonStr, err := bundler.ToJSON(bundleCtx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating JSON: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println(jsonStr)
+		if outputFile == "" {
+			fmt.Println(jsonStr)
+		}
 	} else {
 		output.PrintBundleSummary(bundleCtx)
-		fmt.Println(bundler.ToMarkdown(bundleCtx))
+		if outputFile == "" {
+			fmt.Println(bundler.ToMarkdown(bundleCtx))
+		}
 	}
 
-	if *outputFile != "" {
+	if outputFile != "" {
 		content := bundler.ToMarkdown(bundleCtx)
-		if *formatJSON {
+		if formatJSON {
 			jsonContent, jsonErr := bundler.ToJSON(bundleCtx)
 			if jsonErr != nil {
 				fmt.Fprintf(os.Stderr, "Error generating JSON for file output: %v\n", jsonErr)
@@ -108,32 +125,40 @@ func runBundle(args []string) {
 			}
 			content = jsonContent
 		}
-		if err := os.WriteFile(*outputFile, []byte(content), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error saving bundle to %s: %v\n", *outputFile, err)
+		if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving bundle to %s: %v\n", outputFile, err)
 			os.Exit(1)
 		} else {
-			fmt.Printf("Bundle successfully saved to %s\n", *outputFile)
+			fmt.Printf("Bundle successfully saved to %s\n", outputFile)
 		}
 	}
 }
 
 func runReport(args []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
-	filePath := fs.String("file", "", "Path to review JSON result file")
-	outputDir := fs.String("dir", "reviews", "Output directory for markdown reports")
-	copyClip := fs.Bool("copy", false, "Copy formatted comments to clipboard")
+	var filePath, outputDir string
+	var copyClip bool
+
+	fs.StringVar(&filePath, "file", "", "Path to review JSON result file")
+	fs.StringVar(&filePath, "f", "", "Alias for --file")
+
+	fs.StringVar(&outputDir, "dir", "reviews", "Output directory for markdown reports")
+	fs.StringVar(&outputDir, "d", "reviews", "Alias for --dir")
+
+	fs.BoolVar(&copyClip, "copy", false, "Copy formatted comments to clipboard")
+	fs.BoolVar(&copyClip, "c", false, "Alias for --copy")
 
 	_ = fs.Parse(args)
 
-	if *filePath == "" {
+	if filePath == "" {
 		fmt.Fprintln(os.Stderr, "Error: --file is required for report command")
 		fs.Usage()
 		os.Exit(1)
 	}
 
-	data, err := os.ReadFile(*filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", *filePath, err)
+		fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", filePath, err)
 		os.Exit(1)
 	}
 
@@ -143,7 +168,7 @@ func runReport(args []string) {
 		os.Exit(1)
 	}
 
-	savedPath, err := output.SaveReportToFile(&res, *outputDir)
+	savedPath, err := output.SaveReportToFile(&res, outputDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error saving report: %v\n", err)
 		os.Exit(1)
@@ -152,7 +177,7 @@ func runReport(args []string) {
 
 	output.PrintReviewSummary(&res)
 
-	if *copyClip {
+	if copyClip {
 		count, err := output.CopyCommentsToClipboard(&res)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not copy to clipboard: %v\n", err)

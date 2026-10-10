@@ -1,6 +1,8 @@
 package git
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -158,5 +160,59 @@ func TestShouldFilterFileWithExtra(t *testing.T) {
 	// Normal file should not be filtered
 	if filtered, _ := ShouldFilterFileWithExtra("internal/service/user.go", extraPatterns); filtered {
 		t.Error("expected user.go not to be filtered")
+	}
+}
+
+func TestGitRunner_GetStagedDiff(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	// Initially not a git repo
+	if runner.IsGitRepo() {
+		t.Error("expected tempDir not to be git repo initially")
+	}
+
+	// Initialize git repo
+	if _, err := runner.runCmd("init"); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+	if _, err := runner.runCmd("config", "user.email", "test@example.com"); err != nil {
+		t.Fatalf("git config email failed: %v", err)
+	}
+	if _, err := runner.runCmd("config", "user.name", "Test User"); err != nil {
+		t.Fatalf("git config name failed: %v", err)
+	}
+
+	// Before staging any file, staged diff should be empty
+	staged, err := runner.GetStagedDiff(false)
+	if err != nil {
+		t.Fatalf("GetStagedDiff failed: %v", err)
+	}
+	if len(staged) != 0 {
+		t.Errorf("expected 0 staged files initially, got %d", len(staged))
+	}
+
+	// Create and stage a test file
+	filePath := filepath.Join(tempDir, "test.go")
+	if err := os.WriteFile(filePath, []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := runner.runCmd("add", "test.go"); err != nil {
+		t.Fatalf("git add failed: %v", err)
+	}
+
+	// Verify staged diff
+	staged, err = runner.GetStagedDiff(false)
+	if err != nil {
+		t.Fatalf("GetStagedDiff failed: %v", err)
+	}
+	if len(staged) != 1 {
+		t.Fatalf("expected 1 staged file, got %d", len(staged))
+	}
+	if staged[0].Path != "test.go" {
+		t.Errorf("expected path 'test.go', got %s", staged[0].Path)
+	}
+	if staged[0].Additions != 3 {
+		t.Errorf("expected 3 additions, got %d", staged[0].Additions)
 	}
 }

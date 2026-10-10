@@ -30,7 +30,7 @@ graph LR
     Agent --> Report["Markdown Review Report + GitHub Comments"]
 ```
 
-1. **Trigger:** The developer asks the agent to review a local branch or remote GitHub PR (e.g. `prv bundle --branch feat/auth` or `prv bundle --pr 42`).
+1. **Trigger:** The developer asks the agent to review uncommitted staged changes, a local branch, or a remote GitHub PR (e.g. `prv bundle --staged`, `prv bundle --branch feat/auth`, or `prv bundle --pr 42`).
 2. **Context Gathering:** `prv` bundles unified diffs, filters lockfiles and generated noise, checks `.prv.yaml` sensitive paths, and attaches the 9-dimension checklist.
 3. **Advisory Reasoning:** The agent evaluates the bundle as a Staff Engineer sounding board, identifying the **🎯 Weakest Link in the Change** and **⚖️ Architectural Trade-offs**.
 4. **Actionable Output:** Findings are formatted using **Conventional Comments** (`🚨 blocking`, `⚠️ issue`, `🔒 security`, `⚡ performance`, `💡 suggestion`, `🔍 nit`) with exact line numbers and copy-ready GitHub suggestion blocks (` ```suggestion `).

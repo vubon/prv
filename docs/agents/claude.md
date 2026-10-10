@@ -14,13 +14,14 @@ Add the following section to your repository's `CLAUDE.md`:
 # Pull Request & Code Review Workflow (prv)
 
 ## Tool Commands
+- Bundle staged changes (pre-commit): `prv bundle --staged`
 - Bundle local branch review: `prv bundle --branch <branch_name>`
 - Bundle remote GitHub PR: `prv bundle --pr <pr_number_or_url>`
 - Format review into markdown report: `prv report --file <review_json> --dir reviews/`
 - Review starter config: `prv init`
 
 ## Review Guidelines
-When requested to review code, a branch, or a GitHub PR:
+When requested to review code, staged changes, a branch, or a GitHub PR:
 1. Always run `prv bundle` first to extract unified diffs, noise-filtered context, and team standards from `.prv.yaml`.
 2. Inspect any paths marked `🚨 [SENSITIVE]` for authentication, authorization, or schema migration risks.
 3. Evaluate the diffs as a Staff Engineer against the 9 review dimensions:
@@ -52,6 +53,7 @@ Once `CLAUDE.md` is in place, you can interact directly via the terminal:
 claude
 
 # Ask Claude to review:
+> review my staged changes before I commit
 > review branch feat/payment-retry with prv
 > check PR 42 for security bugs and generate markdown report
 ```
@@ -68,6 +70,9 @@ Claude Desktop interacts with `prv` via file context or local shell tools:
 Generate the review bundle directly to a file:
 
 ```bash
+# For uncommitted staged changes:
+prv bundle --staged -o staged-review.md
+
 # For local branch:
 prv bundle --branch feat/my-feature -o review-context.md
 
@@ -75,10 +80,10 @@ prv bundle --branch feat/my-feature -o review-context.md
 prv bundle --pr 42 -o pr-42-review.md
 ```
 
-Drag and drop `review-context.md` into Claude Desktop and prompt:
+Drag and drop `staged-review.md` or `review-context.md` into Claude Desktop and prompt:
 > "Review this PR context against the 9-dimension engineering matrix. Identify the weakest link, architectural trade-offs, and provide Conventional Comments."
 
 ### Option B: Via Local Shell Execution Tool
 If Claude Desktop is configured with a local command execution tool:
-> "Run `prv bundle --branch feat/my-feature` in the repository and evaluate the output against the 9 engineering dimensions."
+> "Run `prv bundle --staged` in the repository and evaluate the output against the 9 engineering dimensions."
 

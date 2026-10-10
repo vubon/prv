@@ -65,7 +65,7 @@ description: Autonomous Pull Request reviewer using the prv Go context engine an
 
 ## Triggering Reviews
 When the user asks to review code:
-1. Run `prv bundle --branch <name>` or `prv bundle --pr <number>`.
+1. Run `prv bundle --staged` (for pre-commit self-review), `prv bundle --branch <name>`, or `prv bundle --pr <number>`.
 2. Review unified diffs with active team standards from `.prv.yaml`.
 3. Format output per the 9 dimensions and Conventional Comments.
 4. Save report in `reviews/` and persist summary to KacheDB.
@@ -78,6 +78,8 @@ When the user asks to review code:
 Once configured, invoke Antigravity with natural prompts:
 
 ```
+"Review my staged changes before I commit"
+"Run a pre-commit review with prv"
 "Review branch feat/payment-gateway"
 "Review PR #42 with prv"
 "Check our sensitive paths in PR https://github.com/org/repo/pull/10"

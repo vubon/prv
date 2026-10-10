@@ -46,7 +46,22 @@ make install
 
 ## Commands
 
-### 1. Bundle Context for a Local Branch
+### 1. Pre-Commit Self-Review (Staged Changes)
+Run an instant, private pre-commit review on uncommitted staged changes before running `git commit`:
+
+```bash
+# Stage your changes
+git add internal/auth/ pkg/db/
+
+# Bundle staged changes against repo's .prv.yaml rules and sensitive paths
+prv bundle --staged
+
+# Save bundle to file or pipe to clipboard
+prv bundle --staged -o staged.md
+prv bundle --staged | pbcopy
+```
+
+### 2. Bundle Context for a Local Branch
 Extract unified diffs and PR metadata for the current or specified local branch:
 
 ```bash

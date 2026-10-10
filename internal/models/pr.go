@@ -56,6 +56,7 @@ type BundleOptions struct {
 	PRIdentifier string // e.g. "42" or "https://github.com/org/repo/pull/42"
 	RepoPath     string
 	ConfigPath   string // Optional custom path to .prv.yaml
+	Staged       bool   // Bundle git staged changes (--cached) for local self-review
 	FormatJSON   bool
 	IncludeLocks bool
 	MaxDiffLines int

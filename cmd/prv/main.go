@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/vubon/prv"
 	"github.com/vubon/prv/internal/config"
@@ -22,12 +23,16 @@ Usage:
 
 Commands:
   bundle    Gather PR metadata, diffs, and package context for AI review
+  diagram   Generate Mermaid architecture and package dependency graph
   report    Format a review JSON result into markdown and copyable comments
   matrix    Print the 9-Dimension Engineering PR Review Matrix
   init      Generate a starter .prv.yaml configuration file in repository
   version   Show prv CLI version
 
 Examples:
+  prv diagram
+  prv diagram --staged
+  prv diagram -b feat/payment
   prv bundle --staged
   prv bundle --staged -o staged.md
   prv bundle --branch feat/payment --json
@@ -49,6 +54,8 @@ func main() {
 	switch os.Args[1] {
 	case "bundle":
 		runBundle(os.Args[2:])
+	case "diagram":
+		runDiagram(os.Args[2:])
 	case "report":
 		runReport(os.Args[2:])
 	case "matrix":
@@ -222,4 +229,80 @@ func runInit(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Created starter configuration file: %s\n", dest)
+}
+
+func runDiagram(args []string) {
+	fs := flag.NewFlagSet("diagram", flag.ExitOnError)
+	var branch, base, prID, repoPath, outputFile string
+	var staged, markdownFence bool
+
+	fs.BoolVar(&staged, "staged", false, "Generate diagram for git staged changes (--cached)")
+	fs.BoolVar(&staged, "s", false, "Alias for --staged")
+
+	fs.StringVar(&branch, "branch", "", "Feature branch name")
+	fs.StringVar(&branch, "b", "", "Alias for --branch")
+
+	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master)")
+
+	fs.StringVar(&prID, "pr", "", "PR number or full GitHub PR URL")
+
+	fs.StringVar(&repoPath, "repo", ".", "Path to local git repository")
+	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
+
+	fs.StringVar(&outputFile, "output", "", "Save diagram to specific file path")
+	fs.StringVar(&outputFile, "out", "", "Alias for --output")
+	fs.StringVar(&outputFile, "o", "", "Alias for --output")
+
+	fs.BoolVar(&markdownFence, "markdown", false, "Wrap diagram inside ```mermaid markdown code fence")
+	fs.BoolVar(&markdownFence, "m", false, "Alias for --markdown")
+
+	_ = fs.Parse(args)
+
+	if staged && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
+		os.Exit(1)
+	}
+
+	bundler := context.NewBundler(repoPath)
+	opts := models.BundleOptions{
+		Branch:       branch,
+		BaseBranch:   base,
+		PRIdentifier: prID,
+		RepoPath:     repoPath,
+		Staged:       staged,
+	}
+
+	bundleCtx, err := bundler.PrepareBundle(opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating diagram: %v\n", err)
+		os.Exit(1)
+	}
+
+	diag := bundleCtx.ArchitectureDiagram
+	if strings.TrimSpace(diag) == "" {
+		fmt.Fprintf(os.Stderr, "No package architecture relationships found for the specified changes.\n")
+		os.Exit(0)
+	}
+
+	content := diag
+	if markdownFence {
+		content = "```mermaid\n" + diag
+		if !strings.HasSuffix(diag, "\n") {
+			content += "\n"
+		}
+		content += "```\n"
+	}
+
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving diagram to %s: %v\n", outputFile, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Diagram successfully saved to %s\n", outputFile)
+	} else {
+		fmt.Print(content)
+		if !strings.HasSuffix(content, "\n") {
+			fmt.Println()
+		}
+	}
 }

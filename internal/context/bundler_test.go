@@ -84,6 +84,35 @@ func TestBundler_ToMarkdownWithCustomRulesAndSensitiveFiles(t *testing.T) {
 	}
 }
 
+func TestBundler_ToMarkdownWithArchitectureDiagram(t *testing.T) {
+	bundler := NewBundler(".")
+	diag := "graph LR\n    cmd_prv --> internal_context\n"
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "Feature PR",
+			HeadBranch: "feat/diag",
+			BaseBranch: "main",
+		},
+		ArchitectureDiagram: diag,
+		Files: []models.FileChange{
+			{
+				Path:      "cmd/prv/main.go",
+				Additions: 5,
+				Deletions: 0,
+				DiffHunk:  "+func main() {}",
+			},
+		},
+	}
+
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "## 🗺️ Architecture & Component Impact Diagram") {
+		t.Error("expected architecture diagram header in bundle markdown")
+	}
+	if !strings.Contains(md, "```mermaid\n"+diag+"```") {
+		t.Errorf("expected mermaid block in bundle markdown, got:\n%s", md)
+	}
+}
+
 func TestPrepareBundle_StagedNoGitRepo(t *testing.T) {
 	tempDir := t.TempDir()
 	bundler := NewBundler(tempDir)

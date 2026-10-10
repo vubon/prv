@@ -109,7 +109,43 @@ prv report --file review-result.json
 prv report -f review-result.json -d reviews/
 ```
 
-### 6. Repository Configuration (`.prv.yaml`)
+### 6. Auto-Generated Architecture & Flow Diagrams (Mermaid)
+Whenever changes span across package boundaries or introduce package-level dependencies, `prv` automatically analyzes the package import graph and renders a visual Mermaid architecture diagram directly in your context bundle and review reports:
+
+```mermaid
+graph LR
+    cmd_prv["cmd/prv"] --> internal_context["internal/context"]
+    internal_context --> internal_diagram["internal/diagram"]
+    internal_context --> internal_git["internal/git"]
+    internal_diagram --> internal_models["internal/models"]
+
+    classDef touched fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    class internal_context,internal_diagram,internal_models touched;
+```
+
+This immediately gives reviewers and LLMs an architectural birds-eye view of component coupling and blast radius before inspecting line-level diffs.
+
+#### Dedicated `prv diagram` Command
+You can also generate and extract the raw Mermaid diagram directly without full diff bundles:
+
+```bash
+# Generate diagram for current branch against main
+prv diagram
+
+# Generate diagram for uncommitted staged changes
+prv diagram --staged
+
+# Generate diagram for a specific feature branch
+prv diagram -b feat/payment
+
+# Wrap output inside ```mermaid markdown code fence
+prv diagram --staged --markdown
+
+# Save diagram directly to a .mmd file
+prv diagram --staged -o diagram.mmd
+```
+
+### 7. Repository Configuration (`.prv.yaml`)
 Initialize a starter `.prv.yaml` configuration in the current or target directory:
 
 ```bash
@@ -182,6 +218,7 @@ prv bundle -b feat/user-auth -c .prv.prod.yaml
 ### `bundle` Flags
 | Flag | Shorthand | Type | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `--staged` | `-s` | bool | `false` | Bundle git staged changes (`--cached`) for local pre-commit review |
 | `--branch` | `-b` | string | `""` | Target feature branch to review |
 | `--base` | | string | `"main"` | Base branch to compare against |
 | `--pr` | | string | `""` | GitHub PR number or URL (zero-clone) |
@@ -190,6 +227,17 @@ prv bundle -b feat/user-auth -c .prv.prod.yaml
 | `--output` | `--out`, `-o` | string | `""` | Save bundle to specific file path |
 | `--json` | | bool | `false` | Output bundle as raw JSON |
 | `--include-locks`| | bool | `false` | Include lockfiles and generated files in diff |
+
+### `diagram` Flags
+| Flag | Shorthand | Type | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `--staged` | `-s` | bool | `false` | Generate diagram for git staged changes (`--cached`) |
+| `--branch` | `-b` | string | `""` | Target feature branch (defaults to current branch) |
+| `--base` | | string | `"main"` | Base branch to compare against |
+| `--pr` | | string | `""` | GitHub PR number or URL (zero-clone) |
+| `--repo` | `-r` | string | `"."` | Path to local Git repository |
+| `--markdown`| `-m` | bool | `false` | Wrap diagram inside ```` ```mermaid ```` code fence |
+| `--output` | `--out`, `-o` | string | `""` | Save diagram to specific file path |
 
 ### `init` Usage
 ```bash

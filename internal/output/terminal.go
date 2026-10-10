@@ -35,6 +35,9 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	if len(ctx.CustomRules) > 0 {
 		fmt.Printf("   %sStandards:%s   %d custom rules active (.prv.yaml)\n", colorBold, colorReset, len(ctx.CustomRules))
 	}
+	if ctx.ArchitectureDiagram != "" {
+		fmt.Printf("   %sDiagram:%s     %s🗺️ Mermaid component graph generated%s\n", colorBold, colorReset, colorCyan, colorReset)
+	}
 	fmt.Println()
 
 	if len(ctx.Files) > 0 {

@@ -88,6 +88,22 @@ func PrintReviewSummary(res *models.ReviewResult) {
 		fmt.Printf("%s⚖️ Architectural Trade-offs:%s\n%s\n\n", colorBold, colorReset, res.TradeOffs)
 	}
 
+	if len(res.FileWalkthroughs) > 0 {
+		fmt.Printf("%sFile-by-File Changes Walkthrough (%d files):%s\n", colorBold, len(res.FileWalkthroughs), colorReset)
+		for _, w := range res.FileWalkthroughs {
+			badge := ""
+			if w.IsSensitive {
+				badge = fmt.Sprintf(" %s[SENSITIVE]%s", colorRed, colorReset)
+			}
+			topicStr := ""
+			if strings.TrimSpace(w.Topic) != "" {
+				topicStr = fmt.Sprintf(" — %s", strings.TrimSpace(w.Topic))
+			}
+			fmt.Printf("  • %-45s %s(+%d / -%d)%s%s%s\n", w.File, colorCyan, w.Additions, w.Deletions, colorReset, badge, topicStr)
+		}
+		fmt.Println()
+	}
+
 	if len(res.Issues) > 0 {
 		fmt.Printf("%sFindings & Potential Bugs:%s\n", colorBold, colorReset)
 		for i, issue := range res.Issues {

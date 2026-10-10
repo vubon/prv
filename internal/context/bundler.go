@@ -11,6 +11,7 @@ import (
 	"github.com/vubon/prv/internal/git"
 	"github.com/vubon/prv/internal/matrix"
 	"github.com/vubon/prv/internal/models"
+	"github.com/vubon/prv/internal/output"
 )
 
 // Bundler coordinates fetching and packaging review context.
@@ -229,6 +230,7 @@ func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChang
 
 	ctx.SummaryStats = stats
 	ctx.ArchitectureDiagram = diagram.GenerateMermaid(b.repoPath, ctx.Files)
+	ctx.FileWalkthroughs = output.GenerateWalkthroughFromFiles(ctx.Files)
 	return ctx
 }
 
@@ -291,6 +293,12 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 			sb.WriteString("\n")
 		}
 		sb.WriteString("```\n\n")
+	}
+
+	if len(ctx.FileWalkthroughs) > 0 {
+		sb.WriteString("## 🔍 File-by-File Changes Walkthrough Overview\n\n")
+		sb.WriteString(output.FormatWalkthroughMarkdown(ctx.FileWalkthroughs))
+		sb.WriteString("\n\n")
 	}
 
 	sb.WriteString("## Review Evaluation Matrix\n")

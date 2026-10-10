@@ -22,14 +22,18 @@ Usage:
   prv <command> [flags]
 
 Commands:
-  bundle    Gather PR metadata, diffs, and package context for AI review
-  diagram   Generate Mermaid architecture and package dependency graph
-  report    Format a review JSON result into markdown and copyable comments
-  matrix    Print the 9-Dimension Engineering PR Review Matrix
-  init      Generate a starter .prv.yaml configuration file in repository
-  version   Show prv CLI version
+  bundle      Gather PR metadata, diffs, and package context for AI review
+  diagram     Generate Mermaid architecture and package dependency graph
+  walkthrough Generate collapsible file-by-file changes walkthrough
+  report      Format a review JSON result into markdown and copyable comments
+  matrix      Print the 9-Dimension Engineering PR Review Matrix
+  init        Generate a starter .prv.yaml configuration file in repository
+  version     Show prv CLI version
 
 Examples:
+  prv walkthrough
+  prv walkthrough --staged
+  prv walkthrough -b feat/payment
   prv diagram
   prv diagram --staged
   prv diagram -b feat/payment
@@ -56,6 +60,8 @@ func main() {
 		runBundle(os.Args[2:])
 	case "diagram":
 		runDiagram(os.Args[2:])
+	case "walkthrough":
+		runWalkthrough(os.Args[2:])
 	case "report":
 		runReport(os.Args[2:])
 	case "matrix":
@@ -304,5 +310,79 @@ func runDiagram(args []string) {
 		if !strings.HasSuffix(content, "\n") {
 			fmt.Println()
 		}
+	}
+}
+
+func runWalkthrough(args []string) {
+	fs := flag.NewFlagSet("walkthrough", flag.ExitOnError)
+	var branch, base, prID, repoPath, outputFile string
+	var staged, formatJSON bool
+
+	fs.BoolVar(&staged, "staged", false, "Generate walkthrough for git staged changes (--cached)")
+	fs.BoolVar(&staged, "s", false, "Alias for --staged")
+
+	fs.StringVar(&branch, "branch", "", "Feature branch name")
+	fs.StringVar(&branch, "b", "", "Alias for --branch")
+
+	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master)")
+
+	fs.StringVar(&prID, "pr", "", "PR number or full GitHub PR URL")
+
+	fs.StringVar(&repoPath, "repo", ".", "Path to local git repository")
+	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
+
+	fs.StringVar(&outputFile, "output", "", "Save walkthrough to specific file path")
+	fs.StringVar(&outputFile, "out", "", "Alias for --output")
+	fs.StringVar(&outputFile, "o", "", "Alias for --output")
+
+	fs.BoolVar(&formatJSON, "json", false, "Output walkthrough as raw JSON")
+
+	_ = fs.Parse(args)
+
+	if staged && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
+		os.Exit(1)
+	}
+
+	bundler := context.NewBundler(repoPath)
+	opts := models.BundleOptions{
+		Branch:       branch,
+		BaseBranch:   base,
+		PRIdentifier: prID,
+		RepoPath:     repoPath,
+		Staged:       staged,
+	}
+
+	bundleCtx, err := bundler.PrepareBundle(opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating walkthrough: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(bundleCtx.FileWalkthroughs) == 0 {
+		fmt.Fprintf(os.Stderr, "No modified files found to generate walkthrough.\n")
+		os.Exit(0)
+	}
+
+	var content string
+	if formatJSON {
+		bytes, err := json.MarshalIndent(bundleCtx.FileWalkthroughs, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
+			os.Exit(1)
+		}
+		content = string(bytes)
+	} else {
+		content = output.FormatWalkthroughMarkdown(bundleCtx.FileWalkthroughs)
+	}
+
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving walkthrough to %s: %v\n", outputFile, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Walkthrough successfully saved to %s\n", outputFile)
+	} else {
+		fmt.Println(content)
 	}
 }

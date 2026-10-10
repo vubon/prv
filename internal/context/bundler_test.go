@@ -218,4 +218,35 @@ func TestPrepareBundle_StagedWithChanges(t *testing.T) {
 	if len(bundleCtx.SensitiveFiles) != 1 {
 		t.Errorf("expected 1 sensitive file recorded, got %d", len(bundleCtx.SensitiveFiles))
 	}
+	if len(bundleCtx.FileWalkthroughs) != 1 {
+		t.Errorf("expected 1 file walkthrough generated, got %d", len(bundleCtx.FileWalkthroughs))
+	}
+}
+
+func TestBundler_ToMarkdownWithFileWalkthroughs(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "Walkthrough Bundle PR",
+			HeadBranch: "feat/walkthrough",
+			BaseBranch: "main",
+		},
+		FileWalkthroughs: []models.FileWalkthrough{
+			{
+				File:      "cmd/prv/main.go",
+				Additions: 30,
+				Deletions: 2,
+				Topic:     "CLI subcommands",
+				Changes:   []string{"Added runWalkthrough"},
+			},
+		},
+	}
+
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "## 🔍 File-by-File Changes Walkthrough Overview") {
+		t.Errorf("expected File-by-File Changes Walkthrough Overview header in bundle markdown")
+	}
+	if !strings.Contains(md, "<summary><b>cmd/prv/main.go</b> (+30 / -2) — <i>CLI subcommands</i></summary>") {
+		t.Errorf("expected details summary block in bundle markdown, got:\n%s", md)
+	}
 }

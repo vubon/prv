@@ -3,6 +3,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0-alpha] — 2026-10-10
+
+### Added
+- **Collapsible File-by-File Changes Walkthrough (`internal/output/walkthrough.go`)**:
+  - Interactive `<details><summary>...</summary></details>` blocks summarizing each modified file.
+  - Formats file path, addition/deletion stats (`(+N / -M)`), sensitive badges (`🚨 [SENSITIVE]`), and thematic topic labels.
+  - Automatic AST and diff hunk heuristic analysis (`GenerateWalkthroughFromFiles`): extracts modified function signatures (`func Foo()`) and type definitions (`type Bar struct`), ignoring comments and non-code lines.
+  - Clean GitHub Flavored Markdown compliance with newline separation between `<summary>` and markdown list elements.
+  - Native embedding in `prv bundle` context markdown and `prv report` review deliverables.
+- **Dedicated `prv walkthrough` Standalone CLI Command**:
+  - `prv walkthrough`: Generates walkthrough for current branch against main.
+  - `prv walkthrough --staged` / `-s`: Generates walkthrough for uncommitted staged changes.
+  - `prv walkthrough -b <branch>`: Generates walkthrough for a specific feature branch.
+  - `prv walkthrough --json`: Outputs structured walkthrough as JSON.
+  - `prv walkthrough -o <file>`: Direct file export (e.g. `walkthrough.md`).
+- **Comprehensive Unit Testing**:
+  - Added unit test suite in `internal/output/walkthrough_test.go` verifying formatting, edge cases, sensitive paths, topic inference, and symbol extraction.
+  - Added integration tests in `internal/output/markdown_test.go` and `internal/context/bundler_test.go`.
+
+---
+
 ## [0.4.0-alpha] — 2026-10-10
 
 ### Added

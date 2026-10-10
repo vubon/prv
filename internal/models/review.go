@@ -52,18 +52,29 @@ type Suggestion struct {
 
 // ReviewResult represents the structured output of an AI PR review.
 type ReviewResult struct {
-	PRTitle             string       `json:"pr_title"`
-	Branch              string       `json:"branch"`
-	BaseBranch          string       `json:"base_branch"`
-	Verdict             string       `json:"verdict"` // APPROVE, REQUEST_CHANGES, COMMENT
-	Summary             string       `json:"summary"`
-	RiskLevel           string       `json:"risk_level"`
-	WeakestLink         string       `json:"weakest_link,omitempty"`
-	TradeOffs           string       `json:"trade_offs,omitempty"`
-	ArchitectureDiagram string       `json:"architecture_diagram,omitempty"`
-	Issues              []Issue      `json:"issues"`
-	Suggestions         []Suggestion `json:"suggestions"`
-	ReviewedAt          time.Time    `json:"reviewed_at"`
+	PRTitle             string            `json:"pr_title"`
+	Branch              string            `json:"branch"`
+	BaseBranch          string            `json:"base_branch"`
+	Verdict             string            `json:"verdict"` // APPROVE, REQUEST_CHANGES, COMMENT
+	Summary             string            `json:"summary"`
+	RiskLevel           string            `json:"risk_level"`
+	WeakestLink         string            `json:"weakest_link,omitempty"`
+	TradeOffs           string            `json:"trade_offs,omitempty"`
+	ArchitectureDiagram string            `json:"architecture_diagram,omitempty"`
+	FileWalkthroughs    []FileWalkthrough `json:"file_walkthroughs,omitempty"`
+	Issues              []Issue           `json:"issues"`
+	Suggestions         []Suggestion      `json:"suggestions"`
+	ReviewedAt          time.Time         `json:"reviewed_at"`
+}
+
+// FileWalkthrough represents an interactive collapsible summary of changes in a specific file.
+type FileWalkthrough struct {
+	File        string   `json:"file"`
+	Additions   int      `json:"additions"`
+	Deletions   int      `json:"deletions"`
+	Topic       string   `json:"topic,omitempty"`   // Short thematic label, e.g. "Observability & PATH validation"
+	Changes     []string `json:"changes,omitempty"` // Bullet point change descriptions
+	IsSensitive bool     `json:"is_sensitive,omitempty"`
 }
 
 // FormattedComment represents a ready-to-copy GitHub comment block.

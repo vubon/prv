@@ -145,7 +145,48 @@ prv diagram --staged --markdown
 prv diagram --staged -o diagram.mmd
 ```
 
-### 7. Repository Configuration (`.prv.yaml`)
+### 7. Collapsible File-by-File Changes Walkthrough
+To eliminate diff fatigue on large PRs, `prv` generates interactive, collapsible `<details>` blocks summarizing changes, line additions/deletions, sensitive path alerts, and modified function/type symbols for every touched file:
+
+```markdown
+<details>
+<summary><b>cmd/prv/main.go</b> (+87 / -6) — <i>CLI subcommands & entrypoint</i></summary>
+
+- Modified `main()`
+- Modified `runDiagram()`
+- Added or updated `runWalkthrough()`
+</details>
+
+<details>
+<summary><b>internal/output/walkthrough.go</b> (+220 / -0) — <i>Review report & formatting</i></summary>
+
+- Created new file with 220 lines
+- Added or updated `FormatWalkthroughMarkdown()`
+- Added or updated `GenerateWalkthroughFromFiles()`
+</details>
+```
+
+#### Dedicated `prv walkthrough` Command
+Generate and export file-by-file walkthrough summaries on demand:
+
+```bash
+# Generate walkthrough for current branch against main
+prv walkthrough
+
+# Generate walkthrough for uncommitted staged changes
+prv walkthrough --staged
+
+# Generate walkthrough for a specific feature branch
+prv walkthrough -b feat/payment
+
+# Output walkthrough as JSON
+prv walkthrough --staged --json
+
+# Save walkthrough directly to a markdown file
+prv walkthrough --staged -o walkthrough.md
+```
+
+### 8. Repository Configuration (`.prv.yaml`)
 Initialize a starter `.prv.yaml` configuration in the current or target directory:
 
 ```bash

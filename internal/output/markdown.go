@@ -55,6 +55,13 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 		}
 		sb.WriteString("```\n\n")
 	}
+
+	// File-by-File Changes Walkthrough (Collapsible <details> blocks)
+	if len(res.FileWalkthroughs) > 0 {
+		sb.WriteString("## 🔍 File-by-File Changes Walkthrough\n\n")
+		sb.WriteString(FormatWalkthroughMarkdown(res.FileWalkthroughs))
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString("---\n\n")
 
 	// Issues & Findings

@@ -250,3 +250,32 @@ func TestBundler_ToMarkdownWithFileWalkthroughs(t *testing.T) {
 		t.Errorf("expected details summary block in bundle markdown, got:\n%s", md)
 	}
 }
+
+func TestBundler_ToJSON(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "JSON Bundle PR",
+			HeadBranch: "feat/json",
+			BaseBranch: "main",
+		},
+		SummaryStats: models.SummaryStats{
+			TotalFiles:     1,
+			ReviewedFiles:  1,
+			TotalAdditions: 10,
+			TotalDeletions: 2,
+		},
+	}
+
+	jsonStr, err := bundler.ToJSON(ctx)
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+
+	if !strings.Contains(jsonStr, `"title": "JSON Bundle PR"`) {
+		t.Errorf("expected title in JSON output, got:\n%s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, `"total_additions": 10`) {
+		t.Errorf("expected total_additions in JSON output, got:\n%s", jsonStr)
+	}
+}

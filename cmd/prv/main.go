@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/vubon/prv"
 	"github.com/vubon/prv/internal/config"
 	"github.com/vubon/prv/internal/context"
+	"github.com/vubon/prv/internal/git"
 	"github.com/vubon/prv/internal/matrix"
 	"github.com/vubon/prv/internal/models"
 	"github.com/vubon/prv/internal/output"
@@ -43,6 +45,7 @@ Examples:
   prv bundle --branch feat/auth --base main
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
   prv bundle --config custom-rules.yaml -o bundle.md
+  prv report --file review.json --pr 42 --post
   prv report --file review.json --copy
   prv init
   prv matrix
@@ -179,6 +182,13 @@ func runReport(args []string) {
 	fs.StringVar(&outputDir, "dir", "reviews", "Output directory for markdown reports")
 	fs.StringVar(&outputDir, "d", "reviews", "Alias for --dir")
 
+	var prID string
+	fs.StringVar(&prID, "pr", "", "Target PR number or full GitHub PR URL (required when using --post unless specified in JSON)")
+
+	var postComment bool
+	fs.BoolVar(&postComment, "post", false, "Post generated review report directly as a comment on GitHub PR")
+	fs.BoolVar(&postComment, "p", false, "Alias for --post")
+
 	fs.BoolVar(&copyClip, "copy", false, "Copy formatted comments to clipboard")
 	fs.BoolVar(&copyClip, "c", false, "Alias for --copy")
 
@@ -210,6 +220,30 @@ func runReport(args []string) {
 	fmt.Printf("Report saved to: %s\n", savedPath)
 
 	output.PrintReviewSummary(&res)
+
+	if postComment {
+		targetPR := strings.TrimSpace(prID)
+		if targetPR == "" {
+			if res.PRNumber > 0 {
+				targetPR = strconv.Itoa(res.PRNumber)
+			} else if res.PRURL != "" {
+				targetPR = res.PRURL
+			}
+		}
+
+		if targetPR == "" {
+			fmt.Fprintf(os.Stderr, "Error: --pr <number_or_url> is required when using --post (or set 'pr_number' / 'pr_url' in review JSON)\n")
+			os.Exit(1)
+		}
+
+		reportContent := output.GenerateMarkdownReport(&res)
+		ghClient := git.NewGitHubClient()
+		if postErr := ghClient.PostPRComment(targetPR, reportContent, "."); postErr != nil {
+			fmt.Fprintf(os.Stderr, "Error posting review comment to PR %s: %v\n", targetPR, postErr)
+			os.Exit(1)
+		}
+		fmt.Printf("Successfully published review report as a comment on PR %s!\n", targetPR)
+	}
 
 	if copyClip {
 		count, err := output.CopyCommentsToClipboard(&res)

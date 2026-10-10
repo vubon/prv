@@ -52,6 +52,9 @@ When asked to review a branch, PR, or diff:
    Use the Conventional Comments format:
    `🚨 blocking`, `⚠️ issue`, `🔒 security`, `⚡ performance`, `💡 suggestion`, `🔍 nit`
    with exact file and line references (`path/file.go#L42`) and copy-ready GitHub suggestion blocks (` ```suggestion `).
+
+6. **Publishing Safeguard (Human-in-the-Loop):**
+   Always present the review findings to the user first. Do NOT run `prv report --post` or `gh pr comment` until the user explicitly asks to post the comment.
 ```
 
 ---

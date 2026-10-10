@@ -3,6 +3,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0-alpha] — 2026-10-10
+
+### Added
+- **Direct GitHub PR Comment Posting (`internal/git/github.go`)**:
+  - Added `PostPRComment`, `PostPRCommentViaCLI`, and `PostPRCommentViaAPI`.
+  - Supports publishing review reports directly via `gh pr comment <pr> --body-file -` with stdin streaming to prevent shell ARG_MAX limitations.
+  - Automatic fallback to GitHub REST API (`POST /repos/{owner}/{repo}/issues/{number}/comments`) when `GITHUB_TOKEN` is present.
+  - Implemented `ParseRepoFromRemoteURL` to resolve repository owner and name from HTTPS, SSH (`git@github.com:...`), and `ssh://` remotes.
+  - Added configurable `BaseURL` on `GitHubClient` for deterministic testing against mock HTTP servers.
+- **CLI Command Support (`prv report --post`)**:
+  - Added `--post` / `-p` and `--pr` flags to `prv report`.
+  - Automatically identifies PR targets from CLI flags or review JSON `pr_number` / `pr_url`.
+- **Comprehensive Unit Testing Suite**:
+  - Added `internal/git/github_test.go` with table-driven tests for URL parsing, remote slug extraction, validation, and mock API servers.
+  - Added `internal/output/clipboard_test.go` and `internal/output/terminal_test.go`.
+  - Added `TestBundler_ToJSON` in `internal/context/bundler_test.go`.
+  - All test suites passing 100% across all packages.
+
+---
+
 ## [0.5.0-alpha] — 2026-10-10
 
 ### Added

@@ -44,6 +44,17 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 			sb.WriteString(res.TradeOffs + "\n\n")
 		}
 	}
+
+	// Architecture Diagram
+	if res.ArchitectureDiagram != "" {
+		sb.WriteString("## 🗺️ Architecture & Component Impact Diagram\n\n")
+		sb.WriteString("```mermaid\n")
+		sb.WriteString(res.ArchitectureDiagram)
+		if !strings.HasSuffix(res.ArchitectureDiagram, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("```\n\n")
+	}
 	sb.WriteString("---\n\n")
 
 	// Issues & Findings

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vubon/prv/internal/config"
+	"github.com/vubon/prv/internal/diagram"
 	"github.com/vubon/prv/internal/git"
 	"github.com/vubon/prv/internal/matrix"
 	"github.com/vubon/prv/internal/models"
@@ -14,6 +15,7 @@ import (
 
 // Bundler coordinates fetching and packaging review context.
 type Bundler struct {
+	repoPath  string
 	gitRunner *git.GitRunner
 	ghClient  *git.GitHubClient
 }
@@ -21,6 +23,7 @@ type Bundler struct {
 // NewBundler creates a new context Bundler.
 func NewBundler(repoPath string) *Bundler {
 	return &Bundler{
+		repoPath:  repoPath,
 		gitRunner: git.NewGitRunner(repoPath),
 		ghClient:  git.NewGitHubClient(),
 	}
@@ -225,6 +228,7 @@ func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChang
 	}
 
 	ctx.SummaryStats = stats
+	ctx.ArchitectureDiagram = diagram.GenerateMermaid(b.repoPath, ctx.Files)
 	return ctx
 }
 
@@ -278,6 +282,16 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 
 	sb.WriteString("## PR Description / Intent\n")
 	sb.WriteString(ctx.Metadata.Description + "\n\n")
+
+	if ctx.ArchitectureDiagram != "" {
+		sb.WriteString("## 🗺️ Architecture & Component Impact Diagram\n\n")
+		sb.WriteString("```mermaid\n")
+		sb.WriteString(ctx.ArchitectureDiagram)
+		if !strings.HasSuffix(ctx.ArchitectureDiagram, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("```\n\n")
+	}
 
 	sb.WriteString("## Review Evaluation Matrix\n")
 	sb.WriteString(matrix.GenerateMatrixMarkdown() + "\n")

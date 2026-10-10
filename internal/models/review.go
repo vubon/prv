@@ -52,17 +52,18 @@ type Suggestion struct {
 
 // ReviewResult represents the structured output of an AI PR review.
 type ReviewResult struct {
-	PRTitle     string       `json:"pr_title"`
-	Branch      string       `json:"branch"`
-	BaseBranch  string       `json:"base_branch"`
-	Verdict     string       `json:"verdict"` // APPROVE, REQUEST_CHANGES, COMMENT
-	Summary     string       `json:"summary"`
-	RiskLevel   string       `json:"risk_level"`
-	WeakestLink string       `json:"weakest_link,omitempty"`
-	TradeOffs   string       `json:"trade_offs,omitempty"`
-	Issues      []Issue      `json:"issues"`
-	Suggestions []Suggestion `json:"suggestions"`
-	ReviewedAt  time.Time    `json:"reviewed_at"`
+	PRTitle             string       `json:"pr_title"`
+	Branch              string       `json:"branch"`
+	BaseBranch          string       `json:"base_branch"`
+	Verdict             string       `json:"verdict"` // APPROVE, REQUEST_CHANGES, COMMENT
+	Summary             string       `json:"summary"`
+	RiskLevel           string       `json:"risk_level"`
+	WeakestLink         string       `json:"weakest_link,omitempty"`
+	TradeOffs           string       `json:"trade_offs,omitempty"`
+	ArchitectureDiagram string       `json:"architecture_diagram,omitempty"`
+	Issues              []Issue      `json:"issues"`
+	Suggestions         []Suggestion `json:"suggestions"`
+	ReviewedAt          time.Time    `json:"reviewed_at"`
 }
 
 // FormattedComment represents a ready-to-copy GitHub comment block.

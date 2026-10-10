@@ -96,3 +96,22 @@ func TestSaveReportToFile_ZeroDateAndDefaultBranch(t *testing.T) {
 		t.Errorf("saved report contains 0001-01-01 date")
 	}
 }
+
+func TestGenerateMarkdownReport_ArchitectureDiagram(t *testing.T) {
+	diag := "graph LR\n    cmd_prv --> internal_git\n"
+	res := &models.ReviewResult{
+		PRTitle:             "Diagram Test PR",
+		Branch:              "feat/diagram",
+		Verdict:             models.VerdictApprove,
+		ArchitectureDiagram: diag,
+	}
+
+	report := GenerateMarkdownReport(res)
+
+	if !strings.Contains(report, "## 🗺️ Architecture & Component Impact Diagram") {
+		t.Error("expected Architecture Diagram section in report")
+	}
+	if !strings.Contains(report, "```mermaid\n"+diag+"```") {
+		t.Errorf("expected mermaid code block in report, got:\n%s", report)
+	}
+}

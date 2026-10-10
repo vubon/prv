@@ -3,6 +3,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0-alpha] — 2026-10-10
+
+### Added
+- **Auto-Generated Mermaid Architecture Diagrams (`internal/diagram`)**:
+  - AST-powered Go import graph analysis using `go/parser` and `go/token`.
+  - Discovers declared module root from `go.mod` and maps relationships across modified package boundaries and downstream internal dependencies.
+  - Generates deterministic `graph LR` Mermaid syntax with touched packages accented via `classDef touched`.
+  - Fallback scanner parsing unified diff additions for zero-clone / remote PR evaluations.
+  - Polyglot fallback patterns for TypeScript/JavaScript and Python.
+  - Native embedding in `prv bundle` context markdown and `prv report` review deliverables.
+- **Dedicated `prv diagram` Standalone CLI Command**:
+  - `prv diagram`: Generates diagram for current branch against main.
+  - `prv diagram --staged` / `-s`: Generates diagram for uncommitted staged changes.
+  - `prv diagram -b <branch>`: Generates diagram for a specific feature branch.
+  - `prv diagram --markdown` / `-m`: Wraps output in ```mermaid markdown code fence.
+  - `prv diagram -o <file>`: Direct file export (e.g. `architecture.mmd`).
+- **Comprehensive Unit Testing**:
+  - Added test suites in `internal/diagram/mermaid_test.go` verifying ID sanitization, deterministic edge rendering, Go AST module parsing, and diff fallback.
+
+---
+
 ## [0.3.0-alpha] — 2026-10-10
 
 ### Added

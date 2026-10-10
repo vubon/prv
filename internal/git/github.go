@@ -142,7 +142,7 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 	if err != nil {
 		return nil, "", fmt.Errorf("github API request failed: %w", err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(res.Body)
@@ -197,7 +197,7 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 	if err != nil {
 		return meta, "", fmt.Errorf("failed to fetch diff stream: %w", err)
 	}
-	defer diffRes.Body.Close()
+	defer func() { _ = diffRes.Body.Close() }()
 
 	if diffRes.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(diffRes.Body)

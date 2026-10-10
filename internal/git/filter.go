@@ -80,3 +80,31 @@ func ShouldFilterFile(filePath string) (bool, string) {
 
 	return false, ""
 }
+
+// ShouldFilterFileWithExtra checks default noise patterns plus any extra ignore patterns from .prv.yaml.
+func ShouldFilterFileWithExtra(filePath string, extraPatterns []string) (bool, string) {
+	if filtered, reason := ShouldFilterFile(filePath); filtered {
+		return true, reason
+	}
+
+	base := filepath.Base(filePath)
+	clean := filepath.ToSlash(filePath)
+
+	for _, pattern := range extraPatterns {
+		pattern = filepath.ToSlash(pattern)
+		if matched, _ := filepath.Match(pattern, base); matched {
+			return true, "Matches custom ignore pattern: " + pattern
+		}
+		if matched, _ := filepath.Match(pattern, filePath); matched {
+			return true, "Matches custom ignore pattern: " + pattern
+		}
+		if strings.HasSuffix(pattern, "/**") {
+			prefix := strings.TrimSuffix(pattern, "/**")
+			if clean == prefix || strings.HasPrefix(clean, prefix+"/") {
+				return true, "Matches custom ignore pattern: " + pattern
+			}
+		}
+	}
+
+	return false, ""
+}

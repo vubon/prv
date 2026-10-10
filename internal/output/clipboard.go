@@ -45,7 +45,7 @@ func CopyCommentsToClipboard(res *models.ReviewResult) (int, error) {
 
 	var sb strings.Builder
 	for _, c := range comments {
-		sb.WriteString(fmt.Sprintf("<!-- File: %s#L%d -->\n", c.File, c.Line))
+		fmt.Fprintf(&sb, "<!-- File: %s#L%d -->\n", c.File, c.Line)
 		sb.WriteString(c.MarkdownBody)
 		sb.WriteString("\n\n---\n\n")
 	}

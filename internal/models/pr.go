@@ -25,15 +25,19 @@ type FileChange struct {
 	DiffHunk     string `json:"diff_hunk"`
 	IsFiltered   bool   `json:"is_filtered,omitempty"`
 	FilterReason string `json:"filter_reason,omitempty"`
+	IsSensitive  bool   `json:"is_sensitive,omitempty"`
 }
 
 // PRContext is the complete bundle payload produced by prv bundle.
 type PRContext struct {
-	Metadata     PRMetadata   `json:"metadata"`
-	SummaryStats SummaryStats `json:"summary_stats"`
-	Files        []FileChange `json:"files"`
-	IgnoredFiles []string     `json:"ignored_files,omitempty"`
-	BundledAt    time.Time    `json:"bundled_at"`
+	Metadata       PRMetadata   `json:"metadata"`
+	SummaryStats   SummaryStats `json:"summary_stats"`
+	Files          []FileChange `json:"files"`
+	IgnoredFiles   []string     `json:"ignored_files,omitempty"`
+	SensitiveFiles []string     `json:"sensitive_files,omitempty"`
+	CustomRules    []string     `json:"custom_rules,omitempty"`
+	Persona        string       `json:"persona,omitempty"`
+	BundledAt      time.Time    `json:"bundled_at"`
 }
 
 // SummaryStats contains aggregated diff metrics.
@@ -51,6 +55,7 @@ type BundleOptions struct {
 	BaseBranch   string
 	PRIdentifier string // e.g. "42" or "https://github.com/org/repo/pull/42"
 	RepoPath     string
+	ConfigPath   string // Optional custom path to .prv.yaml
 	FormatJSON   bool
 	IncludeLocks bool
 	MaxDiffLines int

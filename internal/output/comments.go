@@ -34,7 +34,7 @@ func FormatConventionalComment(issue models.Issue) string {
 		tag = "performance"
 	}
 
-	sb.WriteString(fmt.Sprintf("%s **%s (%s):** %s\n\n", icon, tag, strings.ToLower(issue.Dimension), issue.Title))
+	fmt.Fprintf(&sb, "%s **%s (%s):** %s\n\n", icon, tag, strings.ToLower(issue.Dimension), issue.Title)
 	sb.WriteString(issue.Description + "\n\n")
 
 	if issue.Suggestion != "" {

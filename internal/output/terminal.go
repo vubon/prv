@@ -29,12 +29,22 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	}
 	fmt.Printf("   %sFiles:%s       %d reviewed (%d filtered)\n", colorBold, colorReset, ctx.SummaryStats.ReviewedFiles, ctx.SummaryStats.FilteredFiles)
 	fmt.Printf("   %sChanges:%s     %s+%d%s / %s-%d%s lines\n", colorBold, colorReset, colorGreen, ctx.SummaryStats.TotalAdditions, colorReset, colorRed, ctx.SummaryStats.TotalDeletions, colorReset)
+	if len(ctx.SensitiveFiles) > 0 {
+		fmt.Printf("   %sSecurity:%s    %s🚨 %d sensitive paths touched%s\n", colorBold, colorReset, colorRed, len(ctx.SensitiveFiles), colorReset)
+	}
+	if len(ctx.CustomRules) > 0 {
+		fmt.Printf("   %sStandards:%s   %d custom rules active (.prv.yaml)\n", colorBold, colorReset, len(ctx.CustomRules))
+	}
 	fmt.Println()
 
 	if len(ctx.Files) > 0 {
 		fmt.Printf("%sChanged Files to Review:%s\n", colorBold, colorReset)
 		for _, f := range ctx.Files {
-			fmt.Printf("  • %-45s %s(+%d / -%d)%s\n", f.Path, colorCyan, f.Additions, f.Deletions, colorReset)
+			sensitiveBadge := ""
+			if f.IsSensitive {
+				sensitiveBadge = fmt.Sprintf(" %s[SENSITIVE]%s", colorRed, colorReset)
+			}
+			fmt.Printf("  • %-45s %s(+%d / -%d)%s%s\n", f.Path, colorCyan, f.Additions, f.Deletions, colorReset, sensitiveBadge)
 		}
 		fmt.Println()
 	}
@@ -51,9 +61,10 @@ func PrintBundleSummary(ctx *models.PRContext) {
 // PrintReviewSummary displays the review verdict, risk, and issues to the terminal.
 func PrintReviewSummary(res *models.ReviewResult) {
 	verdictColor := colorGreen
-	if res.Verdict == models.VerdictRequestChanges {
+	switch res.Verdict {
+	case models.VerdictRequestChanges:
 		verdictColor = colorRed
-	} else if res.Verdict == models.VerdictComment {
+	case models.VerdictComment:
 		verdictColor = colorYellow
 	}
 

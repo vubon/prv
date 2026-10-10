@@ -3,6 +3,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0-alpha] — 2026-10-10
+
+### Added
+- **Pre-PR Local Self-Review (`prv bundle --staged` / `-s`)**:
+  - Support bundling uncommitted git staged changes (`git diff --cached`) for private pre-commit reviews.
+  - Actionable terminal diagnostic if run with empty index: prompts developers to stage changes with `git add`.
+  - Automatic detection of security-sensitive paths in staged index (`🚨 [SENSITIVE]`).
+  - Active `.prv.yaml` team rules and 9-Dimension matrix injection into pre-commit review bundles.
+  - Comprehensive unit test suite covering staged diff extraction and isolated Git environments.
+- **AI Agent & Workflow Guides**:
+  - Added pre-commit review guidance and prompts to Cursor IDE (`docs/agents/cursor.md`).
+  - Added staged review commands to Claude Code & Claude Desktop (`docs/agents/claude.md`).
+  - Added Unix pipe workflows and Git pre-commit hook script (`docs/agents/cli.md`).
+  - Updated universal AI agent workflow hub (`docs/agents/README.md`) and Google Antigravity skill (`.agents/skills/prv/SKILL.md`).
+
+---
+
 ## [0.2.0-alpha] — 2026-10-10
 
 ### Added

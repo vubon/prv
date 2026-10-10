@@ -114,6 +114,16 @@ func (g *GitRunner) GetDiff(baseBranch, headBranch string, includeLocks bool) ([
 	return ParseUnifiedDiff(diffOutput, includeLocks)
 }
 
+// GetStagedDiff runs git diff --cached and returns parsed file changes for staged index.
+func (g *GitRunner) GetStagedDiff(includeLocks bool) ([]models.FileChange, error) {
+	diffOutput, err := g.runCmd("diff", "--cached")
+	if err != nil {
+		return nil, fmt.Errorf("could not compute staged diff: %w", err)
+	}
+
+	return ParseUnifiedDiff(diffOutput, includeLocks)
+}
+
 // ParseUnifiedDiff parses a raw unified diff string into structured FileChange objects.
 func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, error) {
 	var files []models.FileChange

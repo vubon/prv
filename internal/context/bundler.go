@@ -83,7 +83,38 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		return b.buildContext(meta, fileChanges, effectiveCfg), nil
 	}
 
-	// Case 2: Local Git Repository
+	// Case 2: Staged Changes (--staged)
+	if opts.Staged {
+		if !b.gitRunner.IsGitRepo() {
+			return nil, fmt.Errorf("not a git repository: cannot inspect staged changes in %s", opts.RepoPath)
+		}
+
+		currentBranch, err := b.gitRunner.GetCurrentBranch()
+		if err != nil || currentBranch == "" {
+			currentBranch = "HEAD"
+		}
+
+		stagedChanges, diffErr := b.gitRunner.GetStagedDiff(opts.IncludeLocks)
+		if diffErr != nil {
+			return nil, fmt.Errorf("failed to get staged changes: %w", diffErr)
+		}
+
+		if len(stagedChanges) == 0 {
+			return nil, fmt.Errorf("no staged changes found. Use 'git add <files>' to stage your changes before running 'prv bundle --staged'")
+		}
+
+		meta := &models.PRMetadata{
+			Title:       "Pre-commit Self-Review (Staged Changes)",
+			Description: "Uncommitted changes currently staged in git index.",
+			BaseBranch:  "index (staged)",
+			HeadBranch:  currentBranch,
+			CreatedAt:   time.Now(),
+		}
+
+		return b.buildContext(meta, stagedChanges, cfg), nil
+	}
+
+	// Case 3: Local Git Repository Branch
 	if !b.gitRunner.IsGitRepo() {
 		return nil, fmt.Errorf("not a git repository and no remote PR specified: %s", opts.RepoPath)
 	}

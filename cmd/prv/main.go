@@ -28,6 +28,8 @@ Commands:
   version   Show prv CLI version
 
 Examples:
+  prv bundle --staged
+  prv bundle --staged -o staged.md
   prv bundle --branch feat/payment --json
   prv bundle --branch feat/auth --base main
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
@@ -67,7 +69,10 @@ func main() {
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	var branch, base, prID, repoPath, outputFile, configPath string
-	var formatJSON, includeLocks bool
+	var formatJSON, includeLocks, staged bool
+
+	fs.BoolVar(&staged, "staged", false, "Bundle git staged changes (--cached) for local pre-commit review")
+	fs.BoolVar(&staged, "s", false, "Alias for --staged")
 
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
@@ -92,6 +97,11 @@ func runBundle(args []string) {
 
 	_ = fs.Parse(args)
 
+	if staged && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
+		os.Exit(1)
+	}
+
 	bundler := context.NewBundler(repoPath)
 	opts := models.BundleOptions{
 		Branch:       branch,
@@ -99,6 +109,7 @@ func runBundle(args []string) {
 		PRIdentifier: prID,
 		RepoPath:     repoPath,
 		ConfigPath:   configPath,
+		Staged:       staged,
 		FormatJSON:   formatJSON,
 		IncludeLocks: includeLocks,
 	}

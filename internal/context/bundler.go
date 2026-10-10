@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vubon/prv/internal/config"
 	"github.com/vubon/prv/internal/git"
 	"github.com/vubon/prv/internal/matrix"
 	"github.com/vubon/prv/internal/models"
@@ -27,6 +28,14 @@ func NewBundler(repoPath string) *Bundler {
 
 // PrepareBundle gathers all PR metadata, diffs, and filters noise into a structured PRContext.
 func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, error) {
+	cfg, err := config.LoadConfig(opts.RepoPath, opts.ConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("error loading .prv.yaml: %w", err)
+	}
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+
 	// Case 1: Remote GitHub PR URL or Number (Zero-Clone Policy)
 	if opts.PRIdentifier != "" {
 		var meta *models.PRMetadata
@@ -61,7 +70,17 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			return nil, fmt.Errorf("failed to parse PR diff: %w", parseErr)
 		}
 
-		return b.buildContext(meta, fileChanges), nil
+		// In zero-clone mode, if no explicit --config was provided and the local directory
+		// is not a clone of the target PR repository, use default configuration to avoid
+		// leaking unrelated local rules into a foreign PR review.
+		effectiveCfg := cfg
+		if opts.ConfigPath == "" && meta.Repo != "" {
+			if !b.isLocalRepoMatch(meta.Repo) {
+				effectiveCfg = config.DefaultConfig()
+			}
+		}
+
+		return b.buildContext(meta, fileChanges, effectiveCfg), nil
 	}
 
 	// Case 2: Local Git Repository
@@ -70,7 +89,6 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 	}
 
 	headBranch := opts.Branch
-	var err error
 	if headBranch == "" {
 		headBranch, err = b.gitRunner.GetCurrentBranch()
 		if err != nil {
@@ -134,14 +152,16 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		}
 	}
 
-	return b.buildContext(meta, fileChanges), nil
+	return b.buildContext(meta, fileChanges, cfg), nil
 }
 
-// buildContext computes stats and builds PRContext.
-func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange) *models.PRContext {
+// buildContext computes stats, applies custom filters, flags sensitive files, and builds PRContext.
+func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange, cfg *config.Config) *models.PRContext {
 	ctx := &models.PRContext{
-		Metadata:  *meta,
-		BundledAt: time.Now(),
+		Metadata:    *meta,
+		BundledAt:   time.Now(),
+		Persona:     cfg.Review.Persona,
+		CustomRules: cfg.Review.CustomRules,
 	}
 
 	stats := models.SummaryStats{
@@ -149,10 +169,23 @@ func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChang
 	}
 
 	for _, f := range files {
+		// Check custom ignore patterns from .prv.yaml
+		if !f.IsFiltered && len(cfg.Review.IgnorePatterns) > 0 {
+			if filtered, reason := git.ShouldFilterFileWithExtra(f.Path, cfg.Review.IgnorePatterns); filtered {
+				f.IsFiltered = true
+				f.FilterReason = reason
+			}
+		}
+
 		if f.IsFiltered {
 			stats.FilteredFiles++
 			ctx.IgnoredFiles = append(ctx.IgnoredFiles, fmt.Sprintf("%s (%s)", f.Path, f.FilterReason))
 		} else {
+			// Check sensitive paths
+			if config.IsSensitivePath(f.Path, cfg.Review.SensitivePaths) {
+				f.IsSensitive = true
+				ctx.SensitiveFiles = append(ctx.SensitiveFiles, f.Path)
+			}
 			stats.ReviewedFiles++
 			stats.TotalAdditions += f.Additions
 			stats.TotalDeletions += f.Deletions
@@ -177,19 +210,40 @@ func (b *Bundler) ToJSON(ctx *models.PRContext) (string, error) {
 func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("# PR Review Context: %s\n\n", ctx.Metadata.Title))
-	sb.WriteString(fmt.Sprintf("- **Head Branch:** `%s`\n", ctx.Metadata.HeadBranch))
-	sb.WriteString(fmt.Sprintf("- **Base Branch:** `%s`\n", ctx.Metadata.BaseBranch))
+	fmt.Fprintf(&sb, "# PR Review Context: %s\n\n", ctx.Metadata.Title)
+	fmt.Fprintf(&sb, "- **Head Branch:** `%s`\n", ctx.Metadata.HeadBranch)
+	fmt.Fprintf(&sb, "- **Base Branch:** `%s`\n", ctx.Metadata.BaseBranch)
 	if ctx.Metadata.Author != "" {
-		sb.WriteString(fmt.Sprintf("- **Author:** @%s\n", ctx.Metadata.Author))
+		fmt.Fprintf(&sb, "- **Author:** @%s\n", ctx.Metadata.Author)
 	}
-	sb.WriteString(fmt.Sprintf("- **Diff Summary:** %d files reviewed (+%d / -%d)\n",
-		ctx.SummaryStats.ReviewedFiles, ctx.SummaryStats.TotalAdditions, ctx.SummaryStats.TotalDeletions))
+	fmt.Fprintf(&sb, "- **Diff Summary:** %d files reviewed (+%d / -%d)\n",
+		ctx.SummaryStats.ReviewedFiles, ctx.SummaryStats.TotalAdditions, ctx.SummaryStats.TotalDeletions)
 
 	if len(ctx.IgnoredFiles) > 0 {
-		sb.WriteString(fmt.Sprintf("- **Noise Filtered:** %d files ignored\n", len(ctx.IgnoredFiles)))
+		fmt.Fprintf(&sb, "- **Noise Filtered:** %d files ignored\n", len(ctx.IgnoredFiles))
+	}
+	if ctx.Persona != "" {
+		fmt.Fprintf(&sb, "- **Review Persona:** `%s`\n", ctx.Persona)
 	}
 	sb.WriteString("\n")
+
+	if len(ctx.SensitiveFiles) > 0 {
+		sb.WriteString("> [!CAUTION]\n")
+		fmt.Fprintf(&sb, "> **Security Sensitive Paths Touched (%d files):**\n", len(ctx.SensitiveFiles))
+		sb.WriteString("> Reviewers must pay extra attention to security, authorization, and data integrity for:\n")
+		for _, s := range ctx.SensitiveFiles {
+			fmt.Fprintf(&sb, "> - `%s`\n", s)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(ctx.CustomRules) > 0 {
+		sb.WriteString("## 📋 Team Engineering Standards & Custom Rules (`.prv.yaml`)\n\n")
+		for _, r := range ctx.CustomRules {
+			fmt.Fprintf(&sb, "- %s\n", r)
+		}
+		sb.WriteString("\n")
+	}
 
 	sb.WriteString("## PR Description / Intent\n")
 	sb.WriteString(ctx.Metadata.Description + "\n\n")
@@ -199,11 +253,27 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 
 	sb.WriteString("## Code Diffs to Review\n\n")
 	for _, file := range ctx.Files {
-		sb.WriteString(fmt.Sprintf("### File: `%s` `(+%d / -%d)`\n\n", file.Path, file.Additions, file.Deletions))
+		sensitiveBadge := ""
+		if file.IsSensitive {
+			sensitiveBadge = " 🚨 `[SENSITIVE]`"
+		}
+		fmt.Fprintf(&sb, "### File: `%s` `(+%d / -%d)`%s\n\n", file.Path, file.Additions, file.Deletions, sensitiveBadge)
 		sb.WriteString("```diff\n")
 		sb.WriteString(file.DiffHunk)
 		sb.WriteString("\n```\n\n")
 	}
 
 	return sb.String()
+}
+
+// isLocalRepoMatch checks if local repository origin matches the remote PR target repository.
+func (b *Bundler) isLocalRepoMatch(targetRepo string) bool {
+	if !b.gitRunner.IsGitRepo() {
+		return false
+	}
+	url, err := b.gitRunner.GetRemoteURL()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(url), strings.ToLower(targetRepo))
 }

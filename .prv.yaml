@@ -1,0 +1,36 @@
+# .prv.yaml — PR Review Configuration & Team Standards for prv
+version: "1"
+
+review:
+  persona: "staff-advisory"
+
+  strictness:
+    blocking_dimensions:
+      - "logic"
+      - "security"
+      - "blast-radius"
+
+  sensitive_paths:
+    - "internal/auth/**"
+    - "auth/**"
+    - "**/auth/**"
+    - "migrations/**"
+    - "db/migrations/**"
+    - "**/migrations/**"
+    - "*secret*"
+    - "*credential*"
+
+  custom_rules:
+    - "Exported Go errors must be wrapped with %w"
+    - "CLI commands must support both standard output and headless execution"
+    - "All public packages and exported symbols must have descriptive doc comments"
+    - "Unit test coverage must accompany any new flags, parsers, or git filter logic"
+
+  ignore_patterns:
+    - "bin/**"
+    - "dist/**"
+    - "build/**"
+    - "vendor/**"
+    - "mocks/**"
+    - "**/*_mock.go"
+    - "coverage.*"

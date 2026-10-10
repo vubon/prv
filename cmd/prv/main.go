@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/vubon/prv"
+	"github.com/vubon/prv/internal/config"
 	"github.com/vubon/prv/internal/context"
 	"github.com/vubon/prv/internal/matrix"
 	"github.com/vubon/prv/internal/models"
@@ -22,14 +23,17 @@ Usage:
 Commands:
   bundle    Gather PR metadata, diffs, and package context for AI review
   report    Format a review JSON result into markdown and copyable comments
-  matrix    Print the 6-Dimension Engineering PR Review Matrix
+  matrix    Print the 9-Dimension Engineering PR Review Matrix
+  init      Generate a starter .prv.yaml configuration file in repository
   version   Show prv CLI version
 
 Examples:
   prv bundle --branch feat/payment --json
   prv bundle --branch feat/auth --base main
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
+  prv bundle --config custom-rules.yaml -o bundle.md
   prv report --file review.json --copy
+  prv init
   prv matrix
 `)
 }
@@ -47,6 +51,8 @@ func main() {
 		runReport(os.Args[2:])
 	case "matrix":
 		runMatrix()
+	case "init":
+		runInit(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("prv version %s\n", prv.Version())
 	case "help", "--help", "-h":
@@ -60,7 +66,7 @@ func main() {
 
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
-	var branch, base, prID, repoPath, outputFile string
+	var branch, base, prID, repoPath, outputFile, configPath string
 	var formatJSON, includeLocks bool
 
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
@@ -72,6 +78,9 @@ func runBundle(args []string) {
 
 	fs.StringVar(&repoPath, "repo", ".", "Path to local git repository")
 	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
+
+	fs.StringVar(&configPath, "config", "", "Custom path to .prv.yaml configuration file")
+	fs.StringVar(&configPath, "c", "", "Alias for --config")
 
 	fs.BoolVar(&formatJSON, "json", false, "Output bundle as raw JSON to stdout")
 
@@ -89,6 +98,7 @@ func runBundle(args []string) {
 		BaseBranch:   base,
 		PRIdentifier: prID,
 		RepoPath:     repoPath,
+		ConfigPath:   configPath,
 		FormatJSON:   formatJSON,
 		IncludeLocks: includeLocks,
 	}
@@ -189,4 +199,16 @@ func runReport(args []string) {
 
 func runMatrix() {
 	fmt.Println(matrix.GenerateMatrixMarkdown())
+}
+
+func runInit(args []string) {
+	dest := ".prv.yaml"
+	if len(args) > 0 {
+		dest = args[0]
+	}
+	if err := config.WriteDefaultConfig(dest); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating configuration file: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Created starter configuration file: %s\n", dest)
 }

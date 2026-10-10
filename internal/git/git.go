@@ -49,6 +49,11 @@ func (g *GitRunner) GetCurrentBranch() (string, error) {
 	return g.runCmd("rev-parse", "--abbrev-ref", "HEAD")
 }
 
+// GetRemoteURL returns the remote.origin.url of the repository.
+func (g *GitRunner) GetRemoteURL() (string, error) {
+	return g.runCmd("config", "--get", "remote.origin.url")
+}
+
 // GetDefaultBaseBranch attempts to detect origin/main or origin/master.
 func (g *GitRunner) GetDefaultBaseBranch() string {
 	// Try origin HEAD symbolic ref

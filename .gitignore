@@ -10,6 +10,8 @@ bin/
 *.out
 *.test
 coverage.txt
+coverage.html
+
 
 # OS & Editor
 .DS_Store

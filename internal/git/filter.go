@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/vubon/prv/internal/config"
 )
 
 // IgnoredFilePatterns contains default patterns of files to exclude from AI review context to save tokens and avoid noise.
@@ -76,6 +78,21 @@ func ShouldFilterFile(filePath string) (bool, string) {
 	switch strings.ToLower(ext) {
 	case ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz", ".wasm", ".bin":
 		return true, "Binary or media asset"
+	}
+
+	return false, ""
+}
+
+// ShouldFilterFileWithExtra checks default noise patterns plus any extra ignore patterns from .prv.yaml.
+func ShouldFilterFileWithExtra(filePath string, extraPatterns []string) (bool, string) {
+	if filtered, reason := ShouldFilterFile(filePath); filtered {
+		return true, reason
+	}
+
+	for _, pattern := range extraPatterns {
+		if config.MatchesPath(pattern, filePath) {
+			return true, "Matches custom ignore pattern: " + pattern
+		}
 	}
 
 	return false, ""

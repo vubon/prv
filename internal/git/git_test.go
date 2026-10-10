@@ -121,3 +121,42 @@ func TestParseUnifiedDiff_PlusPlusAndMinusMinusLines(t *testing.T) {
 		t.Errorf("expected 1 deletion, got %d", files[0].Deletions)
 	}
 }
+
+func TestShouldFilterFileWithExtra(t *testing.T) {
+	extraPatterns := []string{
+		"*.tmp",
+		"generated/**",
+		"custom.lock",
+		"**/*_mock.go",
+		"**/mocks/**",
+	}
+
+	// Should match default patterns
+	if filtered, _ := ShouldFilterFileWithExtra("go.sum", extraPatterns); !filtered {
+		t.Error("expected go.sum to be filtered by default patterns")
+	}
+
+	// Should match custom extra patterns
+	if filtered, _ := ShouldFilterFileWithExtra("cache.tmp", extraPatterns); !filtered {
+		t.Error("expected cache.tmp to be filtered by extra patterns")
+	}
+	if filtered, _ := ShouldFilterFileWithExtra("generated/code.go", extraPatterns); !filtered {
+		t.Error("expected generated/code.go to be filtered by extra patterns")
+	}
+	if filtered, _ := ShouldFilterFileWithExtra("custom.lock", extraPatterns); !filtered {
+		t.Error("expected custom.lock to be filtered by extra patterns")
+	}
+
+	// Nested double-star globs
+	if filtered, _ := ShouldFilterFileWithExtra("internal/service/user_mock.go", extraPatterns); !filtered {
+		t.Error("expected internal/service/user_mock.go to be filtered by **/*_mock.go")
+	}
+	if filtered, _ := ShouldFilterFileWithExtra("pkg/a/b/mocks/client.go", extraPatterns); !filtered {
+		t.Error("expected pkg/a/b/mocks/client.go to be filtered by **/mocks/**")
+	}
+
+	// Normal file should not be filtered
+	if filtered, _ := ShouldFilterFileWithExtra("internal/service/user.go", extraPatterns); filtered {
+		t.Error("expected user.go not to be filtered")
+	}
+}

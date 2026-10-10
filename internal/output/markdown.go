@@ -22,11 +22,11 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	}
 
 	// Title & Metadata
-	sb.WriteString(fmt.Sprintf("# PR Review Report: %s\n\n", res.PRTitle))
-	sb.WriteString(fmt.Sprintf("- **Branch:** `%s` $\\rightarrow$ `%s`\n", res.Branch, res.BaseBranch))
-	sb.WriteString(fmt.Sprintf("- **Reviewed At:** %s\n", res.ReviewedAt.Format(time.RFC1123)))
-	sb.WriteString(fmt.Sprintf("- **Verdict:** **%s**\n", res.Verdict))
-	sb.WriteString(fmt.Sprintf("- **Risk Level:** `%s`\n\n", res.RiskLevel))
+	fmt.Fprintf(&sb, "# PR Review Report: %s\n\n", res.PRTitle)
+	fmt.Fprintf(&sb, "- **Branch:** `%s` $\\rightarrow$ `%s`\n", res.Branch, res.BaseBranch)
+	fmt.Fprintf(&sb, "- **Reviewed At:** %s\n", res.ReviewedAt.Format(time.RFC1123))
+	fmt.Fprintf(&sb, "- **Verdict:** **%s**\n", res.Verdict)
+	fmt.Fprintf(&sb, "- **Risk Level:** `%s`\n\n", res.RiskLevel)
 
 	// Executive Summary
 	sb.WriteString("## Executive Summary\n\n")
@@ -50,8 +50,8 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	if len(res.Issues) > 0 {
 		sb.WriteString("## Findings & Potential Bugs\n\n")
 		for i, issue := range res.Issues {
-			sb.WriteString(fmt.Sprintf("### %d. %s `%s#L%d`\n\n", i+1, issue.Title, issue.File, issue.LineStart))
-			sb.WriteString(fmt.Sprintf("- **Dimension:** `%s` | **Severity:** `%s`\n\n", issue.Dimension, issue.Severity))
+			fmt.Fprintf(&sb, "### %d. %s `%s#L%d`\n\n", i+1, issue.Title, issue.File, issue.LineStart)
+			fmt.Fprintf(&sb, "- **Dimension:** `%s` | **Severity:** `%s`\n\n", issue.Dimension, issue.Severity)
 			sb.WriteString(issue.Description + "\n\n")
 			if issue.CodeSnippet != "" {
 				sb.WriteString("```go\n" + issue.CodeSnippet + "\n```\n\n")
@@ -68,7 +68,7 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	if len(res.Suggestions) > 0 {
 		sb.WriteString("## Suggestions & Improvements\n\n")
 		for i, sug := range res.Suggestions {
-			sb.WriteString(fmt.Sprintf("### %d. %s `%s#L%d`\n\n", i+1, sug.Title, sug.File, sug.LineStart))
+			fmt.Fprintf(&sb, "### %d. %s `%s#L%d`\n\n", i+1, sug.Title, sug.File, sug.LineStart)
 			sb.WriteString(sug.Description + "\n\n")
 			if sug.Suggestion != "" {
 				sb.WriteString("```suggestion\n" + sug.Suggestion + "\n```\n\n")
@@ -81,7 +81,7 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	sb.WriteString("## 📋 Ready-to-Copy GitHub Review Comments\n\n")
 	comments := GenerateCommentList(res)
 	for _, c := range comments {
-		sb.WriteString(fmt.Sprintf("#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label))
+		fmt.Fprintf(&sb, "#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label)
 		sb.WriteString("````markdown\n")
 		sb.WriteString(c.MarkdownBody)
 		if !strings.HasSuffix(c.MarkdownBody, "\n") {

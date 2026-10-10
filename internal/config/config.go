@@ -41,16 +41,14 @@ func DefaultConfig() *Config {
 			SensitivePaths: []string{
 				"internal/auth/**",
 				"auth/**",
+				"**/auth/**",
 				"migrations/**",
 				"db/migrations/**",
+				"**/migrations/**",
 				"*secret*",
 				"*credential*",
 			},
-			CustomRules: []string{
-				"All database queries must use parameterized placeholders (no string concatenation)",
-				"External network/RPC calls must carry an explicit context with timeout",
-				"Exported Go errors must be wrapped with %w",
-			},
+			CustomRules:    []string{},
 			IgnorePatterns: []string{},
 		},
 	}
@@ -100,7 +98,7 @@ func LoadConfig(repoPath string, customConfigPath string) (*Config, error) {
 	return cfg, nil
 }
 
-// MatchesPath checks if a given file path matches a glob or recursive glob pattern (e.g. "internal/auth/**").
+// MatchesPath checks if a given file path matches a glob or recursive glob pattern (e.g. "internal/auth/**", "**/*.sql", "**/mocks/**").
 func MatchesPath(pattern, path string) bool {
 	// Normalize path separators to forward slash
 	pattern = filepath.ToSlash(pattern)
@@ -115,7 +113,21 @@ func MatchesPath(pattern, path string) bool {
 		return true
 	}
 
-	// Wildcard directory suffix: e.g. "internal/auth/**" or "migrations/**"
+	// 1. Double-star prefix and suffix: e.g. "**/mocks/**" or "**/auth/**"
+	if strings.HasPrefix(pattern, "**/") && strings.HasSuffix(pattern, "/**") {
+		mid := strings.TrimPrefix(strings.TrimSuffix(pattern, "/**"), "**/")
+		segs := strings.Split(path, "/")
+		for i := 0; i < len(segs); i++ {
+			if matched, _ := filepath.Match(mid, segs[i]); matched {
+				return true
+			}
+		}
+		if path == mid {
+			return true
+		}
+	}
+
+	// 2. Wildcard directory suffix: e.g. "internal/auth/**" or "migrations/**"
 	if strings.HasSuffix(pattern, "/**") {
 		prefix := strings.TrimSuffix(pattern, "/**")
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
@@ -123,24 +135,40 @@ func MatchesPath(pattern, path string) bool {
 		}
 	}
 
-	// Wildcard prefix: e.g. "**/*.sql" or "**/auth/*"
+	// 3. Wildcard directory prefix: e.g. "**/*.sql", "**/*_mock.go", "**/auth/*"
 	if strings.HasPrefix(pattern, "**/") {
-		suffix := strings.TrimPrefix(pattern, "**/")
-		if strings.HasSuffix(path, suffix) || strings.Contains(path, "/"+strings.TrimSuffix(suffix, "/*")) {
+		rest := strings.TrimPrefix(pattern, "**/")
+		// Match against base filename if rest has no directory separators
+		base := filepath.Base(path)
+		if matched, _ := filepath.Match(rest, base); matched {
+			return true
+		}
+		// Match against any trailing path segments across arbitrary directory depth
+		segs := strings.Split(path, "/")
+		for i := 0; i < len(segs); i++ {
+			subpath := strings.Join(segs[i:], "/")
+			if matched, _ := filepath.Match(rest, subpath); matched {
+				return true
+			}
+		}
+	}
+
+	// 4. Keyword wildcard matching: e.g. "*secret*", "*credential*" anywhere in path
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") && strings.Count(pattern, "*") == 2 && !strings.Contains(pattern, "/") {
+		keyword := strings.Trim(pattern, "*")
+		if strings.Contains(strings.ToLower(path), strings.ToLower(keyword)) {
 			return true
 		}
 	}
 
-	// Simple filename wildcard: e.g. "*secret*" or "*.key"
-	matched, err := filepath.Match(pattern, path)
-	if err == nil && matched {
+	// 5. Standard filepath.Match against full path
+	if matched, err := filepath.Match(pattern, path); err == nil && matched {
 		return true
 	}
 
-	// Match against base filename
+	// 6. Standard filepath.Match against base filename (e.g. "*.key", "Makefile*")
 	base := filepath.Base(path)
-	matchedBase, err := filepath.Match(pattern, base)
-	if err == nil && matchedBase {
+	if matched, err := filepath.Match(pattern, base); err == nil && matched {
 		return true
 	}
 
@@ -177,10 +205,13 @@ review:
   sensitive_paths:
     - "internal/auth/**"
     - "auth/**"
+    - "**/auth/**"
     - "migrations/**"
     - "db/migrations/**"
+    - "**/migrations/**"
     - "*secret*"
     - "*credential*"
+
 
   # Custom engineering standards injected directly into review prompts
   custom_rules:

@@ -16,10 +16,13 @@ review:
   sensitive_paths:
     - "internal/auth/**"
     - "auth/**"
+    - "**/auth/**"
     - "migrations/**"
     - "db/migrations/**"
+    - "**/migrations/**"
     - "*secret*"
     - "*credential*"
+
 
   # Custom engineering standards injected directly into review prompts
   custom_rules:

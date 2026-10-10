@@ -127,6 +127,8 @@ func TestShouldFilterFileWithExtra(t *testing.T) {
 		"*.tmp",
 		"generated/**",
 		"custom.lock",
+		"**/*_mock.go",
+		"**/mocks/**",
 	}
 
 	// Should match default patterns
@@ -143,6 +145,14 @@ func TestShouldFilterFileWithExtra(t *testing.T) {
 	}
 	if filtered, _ := ShouldFilterFileWithExtra("custom.lock", extraPatterns); !filtered {
 		t.Error("expected custom.lock to be filtered by extra patterns")
+	}
+
+	// Nested double-star globs
+	if filtered, _ := ShouldFilterFileWithExtra("internal/service/user_mock.go", extraPatterns); !filtered {
+		t.Error("expected internal/service/user_mock.go to be filtered by **/*_mock.go")
+	}
+	if filtered, _ := ShouldFilterFileWithExtra("pkg/a/b/mocks/client.go", extraPatterns); !filtered {
+		t.Error("expected pkg/a/b/mocks/client.go to be filtered by **/mocks/**")
 	}
 
 	// Normal file should not be filtered

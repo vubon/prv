@@ -14,8 +14,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Review.Persona != "staff-advisory" {
 		t.Errorf("expected persona staff-advisory, got %s", cfg.Review.Persona)
 	}
-	if len(cfg.Review.CustomRules) == 0 {
-		t.Error("expected default custom rules to be populated")
+	if len(cfg.Review.CustomRules) != 0 {
+		t.Errorf("expected default custom rules to be empty, got %d", len(cfg.Review.CustomRules))
 	}
 	if len(cfg.Review.SensitivePaths) == 0 {
 		t.Error("expected default sensitive paths to be populated")
@@ -75,15 +75,43 @@ func TestMatchesPath(t *testing.T) {
 		path     string
 		expected bool
 	}{
+		// Suffix wildcard /**
 		{"internal/auth/**", "internal/auth/jwt.go", true},
 		{"internal/auth/**", "internal/auth/handlers/login.go", true},
 		{"internal/auth/**", "internal/context/bundler.go", false},
 		{"migrations/**", "migrations/001_init.sql", true},
+		{"auth/**", "auth/login.go", true},
+		{"auth/**", "internal/auth/login.go", false}, // anchored prefix
+
+		// Prefix wildcard **/ with arbitrary depth
+		{"**/*_mock.go", "x_mock.go", true},
+		{"**/*_mock.go", "internal/x_mock.go", true},
+		{"**/*_mock.go", "internal/foo/x_mock.go", true},
+		{"**/*_mock.go", "pkg/a/b/c/foo_mock.go", true},
+		{"**/*_mock.go", "internal/foo/mock.go", false},
+		{"**/*.sql", "query.sql", true},
+		{"**/*.sql", "db/query.sql", true},
+		{"**/*.sql", "db/a/b/query.sql", true},
+		{"**/auth/*", "pkg/internal/auth/token.go", true},
+		{"**/auth/*", "auth/token.go", true},
+
+		// Both prefix & suffix **/.../**
+		{"**/mocks/**", "mocks/a.go", true},
+		{"**/mocks/**", "pkg/mocks/a.go", true},
+		{"**/mocks/**", "a/b/mocks/c/d.go", true},
+		{"**/mocks/**", "pkg/mock/a.go", false},
+		{"**/auth/**", "internal/auth/jwt.go", true},
+		{"**/auth/**", "pkg/a/auth/b/c.go", true},
+
+		// Keyword wildcards anywhere in path
 		{"*secret*", "config_secret_keys.go", true},
+		{"*secret*", "internal/secrets/app.go", true},
 		{"*secret*", "models/user.go", false},
+		{"*credential*", "pkg/credentials/token.go", true},
+
+		// Single filename wildcard
 		{"*.sql", "db/query.sql", true},
 		{"*.sql", "db/query.go", false},
-		{"**/auth/*", "pkg/internal/auth/token.go", true},
 	}
 
 	for _, tc := range tests {

@@ -3,7 +3,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.2.0] — 2026-10-10
+## [0.2.0-alpha] — 2026-10-10
 
 ### Added
 - **Repository Configuration (`.prv.yaml`)**:
@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   - Dedicated setup guides in `docs/agents/` for Google Antigravity, Cursor IDE, Claude Code / Desktop, and Headless CLI pipelines.
 
 ### Changed
+- Unified glob matching across config and git noise filters; strengthened multi-segment double-star matching for nested directories.
+- Safeguarded zero-clone remote PR bundling to apply local `.prv.yaml` only when running within matching repository clones.
 - Standardized string builder formatting to idiomatic `fmt.Fprintf` across internal output packages.
 - Handled deferred HTTP response body closing in GitHub client.
 

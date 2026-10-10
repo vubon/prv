@@ -20,6 +20,7 @@ prv version
 ```
 
 > [!NOTE]
+> Pre-compiled binary archives are published on [GitHub Releases](https://github.com/vubon/prv/releases) starting with `v0.2.0-alpha`.
 > On macOS, if you encounter Gatekeeper restrictions when running a downloaded binary, run:
 > `xattr -d com.apple.quarantine /usr/local/bin/prv`
 
@@ -107,27 +108,46 @@ prv init /path/to/repo
 You can customize review personas, sensitive directory paths, custom team engineering rules injected into review bundles, and extra noise ignore globs:
 
 ```yaml
-version: 1
+version: "1"
 
 review:
-  persona: "staff_engineer" # staff_engineer, security_focused, minimal
+  # Review persona: "staff-advisory" (default) | "strict-linter" | "mentor"
+  persona: "staff-advisory"
+
+  # Strictness settings for review verdicts
   strictness:
-    level: "standard" # relaxed, standard, strict
-    max_risk_tolerance: "low"
+    blocking_dimensions:
+      - "logic"
+      - "security"
+      - "blast-radius"
+
+  # Directories requiring extra scrutiny in reviews
   sensitive_paths:
     - "internal/auth/**"
+    - "auth/**"
+    - "**/auth/**"
     - "migrations/**"
-    - "pkg/crypto/**"
+    - "db/migrations/**"
+    - "**/migrations/**"
+    - "*secret*"
+    - "*credential*"
+
+  # Custom engineering standards injected directly into review prompts
   custom_rules:
-    - "Ensure context.Context is the first argument in exported functions"
-    - "All database mutations must be executed within a transaction"
-    - "Never log raw user input or authentication tokens"
-  # (Note: lockfiles, *.pb.go, and minified assets are ignored automatically)
+    - "All database queries must use parameterized placeholders (no string concatenation)"
+    - "External HTTP/RPC calls must carry an explicit context with timeout"
+    - "Exported Go errors must be wrapped with %w"
+    - "No raw goroutines; manage concurrency through worker pools or errgroup"
+
+  # Additional file globs to ignore during diff bundling
+  # (Note: lockfiles, *.pb.go, *_generated.go, and minified assets are ignored automatically)
   ignore_patterns:
     - "dist/**"
     - "build/**"
+    - "vendor/**"
     - "mocks/**"
     - "**/*_mock.go"
+    - "docs/swagger/**"
 ```
 
 Use a custom config file path during bundle generation:
@@ -137,6 +157,10 @@ prv bundle --branch feat/user-auth --config .prv.prod.yaml
 # Or with shorthand -c
 prv bundle -b feat/user-auth -c .prv.prod.yaml
 ```
+
+> [!NOTE]
+> In zero-clone `--pr` mode, repository configuration is automatically loaded from `.prv.yaml` if running inside the repository clone, or when explicitly passed via `--config`. For remote PRs evaluated outside their repository, safe defaults are applied.
+
 
 ## Review Flags Reference
 

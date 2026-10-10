@@ -70,7 +70,17 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			return nil, fmt.Errorf("failed to parse PR diff: %w", parseErr)
 		}
 
-		return b.buildContext(meta, fileChanges, cfg), nil
+		// In zero-clone mode, if no explicit --config was provided and the local directory
+		// is not a clone of the target PR repository, use default configuration to avoid
+		// leaking unrelated local rules into a foreign PR review.
+		effectiveCfg := cfg
+		if opts.ConfigPath == "" && meta.Repo != "" {
+			if !b.isLocalRepoMatch(meta.Repo) {
+				effectiveCfg = config.DefaultConfig()
+			}
+		}
+
+		return b.buildContext(meta, fileChanges, effectiveCfg), nil
 	}
 
 	// Case 2: Local Git Repository
@@ -254,4 +264,16 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 	}
 
 	return sb.String()
+}
+
+// isLocalRepoMatch checks if local repository origin matches the remote PR target repository.
+func (b *Bundler) isLocalRepoMatch(targetRepo string) bool {
+	if !b.gitRunner.IsGitRepo() {
+		return false
+	}
+	url, err := b.gitRunner.GetRemoteURL()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(url), strings.ToLower(targetRepo))
 }

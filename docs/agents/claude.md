@@ -60,22 +60,25 @@ Claude Code will automatically run `prv bundle`, analyze the unified context, an
 
 ---
 
-## 3. Claude Desktop Configuration
+## 3. Claude Desktop Workflow
 
-If using Claude Desktop with the Bash / Local Command execution MCP server, add `prv` to the environment PATH in your `claude_desktop_config.json`:
+Claude Desktop interacts with `prv` via file context or local shell tools:
 
-```json
-{
-  "mcpServers": {
-    "prv-context": {
-      "command": "prv",
-      "args": ["bundle", "--branch", "main"]
-    }
-  }
-}
+### Option A: Via Generated Bundle File
+Generate the review bundle directly to a file:
+
+```bash
+# For local branch:
+prv bundle --branch feat/my-feature -o review-context.md
+
+# For remote PR:
+prv bundle --pr 42 -o pr-42-review.md
 ```
 
-Or simply instruct Claude Desktop:
-```
-"Run 'prv bundle --branch feat/my-feature' in the repo directory and review the output against the 9 engineering dimensions."
-```
+Drag and drop `review-context.md` into Claude Desktop and prompt:
+> "Review this PR context against the 9-dimension engineering matrix. Identify the weakest link, architectural trade-offs, and provide Conventional Comments."
+
+### Option B: Via Local Shell Execution Tool
+If Claude Desktop is configured with a local command execution tool:
+> "Run `prv bundle --branch feat/my-feature` in the repository and evaluate the output against the 9 engineering dimensions."
+

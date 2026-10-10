@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +18,8 @@ import (
 
 // GitHubClient handles interaction with GitHub via gh CLI or REST API.
 type GitHubClient struct {
-	Token string
+	Token   string
+	BaseURL string // Overrides API base URL (defaults to https://api.github.com if empty)
 }
 
 // NewGitHubClient creates a new GitHub client.
@@ -27,6 +29,13 @@ func NewGitHubClient() *GitHubClient {
 		token = os.Getenv("GH_TOKEN")
 	}
 	return &GitHubClient{Token: token}
+}
+
+func (c *GitHubClient) baseURL() string {
+	if c.BaseURL != "" {
+		return strings.TrimRight(c.BaseURL, "/")
+	}
+	return "https://api.github.com"
 }
 
 // ghViewResponse represents the JSON output from `gh pr view --json ...`.
@@ -128,7 +137,7 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	// 1. Fetch PR Metadata JSON
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d", owner, repo, prNumber)
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL(), owner, repo, prNumber)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, "", err
@@ -210,4 +219,129 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 	}
 
 	return meta, string(diffBytes), nil
+}
+
+// ParseRepoFromRemoteURL extracts owner and repo from an SSH or HTTPS git remote URL.
+func ParseRepoFromRemoteURL(remoteURL string) (owner, repo string, err error) {
+	trimmed := strings.TrimSpace(remoteURL)
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+
+	// SSH style: git@github.com:owner/repo
+	if strings.Contains(trimmed, ":") && !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") && !strings.HasPrefix(trimmed, "ssh://") {
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) == 2 {
+			slugParts := strings.Split(parts[1], "/")
+			if len(slugParts) == 2 && slugParts[0] != "" && slugParts[1] != "" {
+				return slugParts[0], slugParts[1], nil
+			}
+		}
+	}
+
+	// URL style: https://github.com/owner/repo or ssh://git@github.com/owner/repo
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2], parts[len(parts)-1], nil
+	}
+
+	return "", "", fmt.Errorf("cannot parse owner and repo from remote URL: %s", remoteURL)
+}
+
+// PostPRComment posts a review comment to a pull request using either gh CLI or the REST API.
+func (c *GitHubClient) PostPRComment(prOrURL string, commentBody string, repoPath string) error {
+	if strings.TrimSpace(commentBody) == "" {
+		return fmt.Errorf("comment body cannot be empty")
+	}
+	if strings.TrimSpace(prOrURL) == "" {
+		return fmt.Errorf("PR identifier (number or URL) cannot be empty")
+	}
+
+	// Try gh CLI first if available
+	if _, err := exec.LookPath("gh"); err == nil {
+		if cliErr := c.PostPRCommentViaCLI(prOrURL, commentBody, repoPath); cliErr == nil {
+			return nil
+		} else if c.Token == "" {
+			// CLI failed and no token configured for API fallback
+			return cliErr
+		}
+	}
+
+	// Fallback to GitHub REST API if GITHUB_TOKEN is available
+	if c.Token != "" {
+		if strings.HasPrefix(prOrURL, "http://") || strings.HasPrefix(prOrURL, "https://") {
+			owner, repo, number, err := ParsePRURL(prOrURL)
+			if err != nil {
+				return err
+			}
+			return c.PostPRCommentViaAPI(owner, repo, number, commentBody)
+		}
+
+		// If a plain PR number was provided, attempt to infer owner and repo from local git remote
+		if number, numErr := strconv.Atoi(prOrURL); numErr == nil && repoPath != "" {
+			runner := NewGitRunner(repoPath)
+			if remoteURL, rErr := runner.GetRemoteURL(); rErr == nil {
+				if owner, repo, pErr := ParseRepoFromRemoteURL(remoteURL); pErr == nil {
+					return c.PostPRCommentViaAPI(owner, repo, number, commentBody)
+				}
+			}
+		}
+	}
+
+	return fmt.Errorf("failed to post PR comment: neither GitHub CLI 'gh' succeeded nor valid GITHUB_TOKEN was available")
+}
+
+// PostPRCommentViaCLI publishes a comment using `gh pr comment <pr> --body-file -`.
+func (c *GitHubClient) PostPRCommentViaCLI(prOrURL string, commentBody string, repoPath string) error {
+	if _, lookErr := exec.LookPath("gh"); lookErr != nil {
+		return fmt.Errorf("GitHub CLI 'gh' is not installed or not in $PATH")
+	}
+
+	cmd := exec.Command("gh", "pr", "comment", prOrURL, "--body-file", "-")
+	if repoPath != "" {
+		cmd.Dir = repoPath
+	}
+	cmd.Stdin = strings.NewReader(commentBody)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gh pr comment failed: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// PostPRCommentViaAPI publishes a comment directly via the GitHub REST API.
+func (c *GitHubClient) PostPRCommentViaAPI(owner, repo string, prNumber int, commentBody string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", c.baseURL(), owner, repo, prNumber)
+
+	payload := map[string]string{"body": commentBody}
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal comment payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("github comment API request failed: %w", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.StatusCode != http.StatusCreated {
+		errBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("github comment API returned HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(errBody)))
+	}
+	return nil
 }

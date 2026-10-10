@@ -104,9 +104,18 @@ prv bundle --pr 1 --output pr-1-bundle.md
 Format a review result JSON and generate a structured markdown report:
 
 ```bash
+# Save report to reviews/ directory and display terminal summary
 prv report --file review-result.json
-# Or using shorthand -f and save directory
+
+# Using shorthand flags and custom output directory
 prv report -f review-result.json -d reviews/
+
+# Copy all formatted review comments directly to system clipboard
+prv report --file review-result.json --copy
+
+# Publish review report directly as a comment on GitHub PR
+prv report --file review-result.json --pr 42 --post
+prv report -f review-result.json --pr https://github.com/org/repo/pull/42 --post
 ```
 
 ### 6. Auto-Generated Architecture & Flow Diagrams (Mermaid)

@@ -52,6 +52,8 @@ type Suggestion struct {
 
 // ReviewResult represents the structured output of an AI PR review.
 type ReviewResult struct {
+	PRNumber            int               `json:"pr_number,omitempty"`
+	PRURL               string            `json:"pr_url,omitempty"`
 	PRTitle             string            `json:"pr_title"`
 	Branch              string            `json:"branch"`
 	BaseBranch          string            `json:"base_branch"`

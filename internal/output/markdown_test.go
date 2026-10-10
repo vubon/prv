@@ -115,3 +115,43 @@ func TestGenerateMarkdownReport_ArchitectureDiagram(t *testing.T) {
 		t.Errorf("expected mermaid code block in report, got:\n%s", report)
 	}
 }
+
+func TestGenerateMarkdownReport_FileWalkthroughs(t *testing.T) {
+	walkthroughs := []models.FileWalkthrough{
+		{
+			File:      "internal/output/walkthrough.go",
+			Additions: 40,
+			Deletions: 5,
+			Topic:     "Walkthrough Engine",
+			Changes: []string{
+				"Implemented FormatWalkthroughMarkdown",
+			},
+		},
+	}
+
+	resWithWalkthrough := &models.ReviewResult{
+		PRTitle:          "Walkthrough Test PR",
+		Branch:           "feat/walkthrough",
+		Verdict:          models.VerdictApprove,
+		FileWalkthroughs: walkthroughs,
+	}
+
+	report := GenerateMarkdownReport(resWithWalkthrough)
+	if !strings.Contains(report, "## 🔍 File-by-File Changes Walkthrough") {
+		t.Errorf("expected File-by-File Changes Walkthrough section in report")
+	}
+	if !strings.Contains(report, "<details>") || !strings.Contains(report, "internal/output/walkthrough.go") {
+		t.Errorf("expected details block with file in report")
+	}
+
+	// Without walkthroughs, section header should not appear
+	resWithout := &models.ReviewResult{
+		PRTitle: "No Walkthrough PR",
+		Branch:  "feat/empty",
+		Verdict: models.VerdictApprove,
+	}
+	reportWithout := GenerateMarkdownReport(resWithout)
+	if strings.Contains(reportWithout, "## 🔍 File-by-File Changes Walkthrough") {
+		t.Errorf("expected report without walkthroughs to omit section header")
+	}
+}

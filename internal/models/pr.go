@@ -30,15 +30,16 @@ type FileChange struct {
 
 // PRContext is the complete bundle payload produced by prv bundle.
 type PRContext struct {
-	Metadata            PRMetadata   `json:"metadata"`
-	SummaryStats        SummaryStats `json:"summary_stats"`
-	Files               []FileChange `json:"files"`
-	IgnoredFiles        []string     `json:"ignored_files,omitempty"`
-	SensitiveFiles      []string     `json:"sensitive_files,omitempty"`
-	CustomRules         []string     `json:"custom_rules,omitempty"`
-	Persona             string       `json:"persona,omitempty"`
-	ArchitectureDiagram string       `json:"architecture_diagram,omitempty"`
-	BundledAt           time.Time    `json:"bundled_at"`
+	Metadata            PRMetadata        `json:"metadata"`
+	SummaryStats        SummaryStats      `json:"summary_stats"`
+	Files               []FileChange      `json:"files"`
+	FileWalkthroughs    []FileWalkthrough `json:"file_walkthroughs,omitempty"`
+	IgnoredFiles        []string          `json:"ignored_files,omitempty"`
+	SensitiveFiles      []string          `json:"sensitive_files,omitempty"`
+	CustomRules         []string          `json:"custom_rules,omitempty"`
+	Persona             string            `json:"persona,omitempty"`
+	ArchitectureDiagram string            `json:"architecture_diagram,omitempty"`
+	BundledAt           time.Time         `json:"bundled_at"`
 }
 
 // SummaryStats contains aggregated diff metrics.

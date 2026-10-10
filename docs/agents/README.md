@@ -34,3 +34,5 @@ graph LR
 2. **Context Gathering:** `prv` bundles unified diffs, filters lockfiles and generated noise, checks `.prv.yaml` sensitive paths, and attaches the 9-dimension checklist.
 3. **Advisory Reasoning:** The agent evaluates the bundle as a Staff Engineer sounding board, identifying the **🎯 Weakest Link in the Change** and **⚖️ Architectural Trade-offs**.
 4. **Actionable Output:** Findings are formatted using **Conventional Comments** (`🚨 blocking`, `⚠️ issue`, `🔒 security`, `⚡ performance`, `💡 suggestion`, `🔍 nit`) with exact line numbers and copy-ready GitHub suggestion blocks (` ```suggestion `).
+5. **Human-in-the-Loop Publishing:** Reviews are presented to the engineer in chat/terminal first. Comments are only published to GitHub (`prv report --post`) when the engineer explicitly requests to publish.
+

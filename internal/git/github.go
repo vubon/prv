@@ -382,7 +382,7 @@ func (c *GitHubClient) PostPRReview(prOrURL string, payload *models.PullRequestR
 		if cliErr := c.PostPRReviewViaCLI(owner, repo, number, payload, repoPath); cliErr == nil {
 			return nil
 		} else if len(payload.Comments) > 0 && strings.Contains(strings.ToLower(cliErr.Error()), "diff") {
-			// If inline comments failed due to diff anchoring mismatch, retry without inline comments as fallback
+			fmt.Fprintf(os.Stderr, "Warning: inline diff anchoring failed (%v); falling back to top-level review\n", cliErr)
 			fallbackPayload := *payload
 			fallbackPayload.Comments = nil
 			if retryErr := c.PostPRReviewViaCLI(owner, repo, number, &fallbackPayload, repoPath); retryErr == nil {
@@ -400,6 +400,7 @@ func (c *GitHubClient) PostPRReview(prOrURL string, payload *models.PullRequestR
 			return nil
 		}
 		if len(payload.Comments) > 0 && strings.Contains(strings.ToLower(apiErr.Error()), "422") {
+			fmt.Fprintf(os.Stderr, "Warning: inline diff anchoring failed (HTTP 422); falling back to top-level review\n")
 			fallbackPayload := *payload
 			fallbackPayload.Comments = nil
 			if retryErr := c.PostPRReviewViaAPI(owner, repo, number, &fallbackPayload); retryErr == nil {

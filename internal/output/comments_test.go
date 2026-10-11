@@ -155,3 +155,39 @@ func TestGenerateInlineComments(t *testing.T) {
 		t.Errorf("expected conventional comment in suggestion body, got: %s", inline[1].Body)
 	}
 }
+
+func TestGenerateInlineComments_MultiLine(t *testing.T) {
+	res := &models.ReviewResult{
+		Verdict: models.VerdictRequestChanges,
+		Issues: []models.Issue{
+			{
+				Dimension:   "Logic",
+				Subject:     "error-handling",
+				File:        "pkg/client/http.go",
+				LineStart:   384,
+				LineEnd:     390,
+				Severity:    models.SeverityMajor,
+				Title:       "Missing diagnostic log",
+				Description: "Surface error before retrying",
+			},
+		},
+	}
+
+	inline := GenerateInlineComments(res)
+	if len(inline) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(inline))
+	}
+
+	// For GitHub API multi-line comments: Line is EndLine (390), StartLine is LineStart (384)
+	if inline[0].Line != 390 || inline[0].StartLine != 384 {
+		t.Errorf("expected Line=390, StartLine=384, got Line=%d, StartLine=%d", inline[0].Line, inline[0].StartLine)
+	}
+
+	comments := GenerateCommentList(res)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+	if comments[0].Line != 384 || comments[0].LineEnd != 390 {
+		t.Errorf("expected Line=384, LineEnd=390, got Line=%d, LineEnd=%d", comments[0].Line, comments[0].LineEnd)
+	}
+}

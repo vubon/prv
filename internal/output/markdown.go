@@ -86,7 +86,11 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	if len(res.Suggestions) > 0 {
 		sb.WriteString("## Suggestions & Improvements\n\n")
 		for i, sug := range res.Suggestions {
-			fmt.Fprintf(&sb, "### %d. %s `%s#L%d`\n\n", i+1, sug.Title, sug.File, sug.LineStart)
+			if sug.LineEnd > sug.LineStart {
+				fmt.Fprintf(&sb, "### %d. %s `%s#L%d-L%d`\n\n", i+1, sug.Title, sug.File, sug.LineStart, sug.LineEnd)
+			} else {
+				fmt.Fprintf(&sb, "### %d. %s `%s#L%d`\n\n", i+1, sug.Title, sug.File, sug.LineStart)
+			}
 			sb.WriteString(sug.Description + "\n\n")
 			if sug.Suggestion != "" {
 				sb.WriteString("```suggestion\n" + sug.Suggestion + "\n```\n\n")
@@ -99,7 +103,11 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 	sb.WriteString("## 📋 Ready-to-Copy GitHub Review Comments\n\n")
 	comments := GenerateCommentList(res)
 	for _, c := range comments {
-		fmt.Fprintf(&sb, "#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label)
+		if c.LineEnd > c.Line {
+			fmt.Fprintf(&sb, "#### `%s#L%d-L%d` (select lines %d–%d on diff) %s\n\n", c.File, c.Line, c.LineEnd, c.Line, c.LineEnd, c.Label)
+		} else {
+			fmt.Fprintf(&sb, "#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label)
+		}
 		sb.WriteString("````markdown\n")
 		sb.WriteString(c.MarkdownBody)
 		if !strings.HasSuffix(c.MarkdownBody, "\n") {

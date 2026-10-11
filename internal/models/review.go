@@ -85,6 +85,7 @@ type FileWalkthrough struct {
 type FormattedComment struct {
 	File         string `json:"file"`
 	Line         int    `json:"line"`
+	LineEnd      int    `json:"line_end,omitempty"`
 	Label        string `json:"label"` // e.g. "⚠️ [bug]", "🔒 [security]", "⚡ [performance]"
 	MarkdownBody string `json:"markdown_body"`
 }

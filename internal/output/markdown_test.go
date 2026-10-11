@@ -200,3 +200,31 @@ func TestBuildReviewPayload(t *testing.T) {
 		t.Errorf("expected default event COMMENT, got %s", payloadComment.Event)
 	}
 }
+
+func TestGenerateMarkdownReport_MultiLineAnchor(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle: "MultiLine Anchor PR",
+		Branch:  "feat/anchor",
+		Verdict: models.VerdictApprove,
+		Suggestions: []models.Suggestion{
+			{
+				Dimension:   "Observability",
+				Subject:     "error-diagnostics",
+				File:        "internal/git/github.go",
+				LineStart:   384,
+				LineEnd:     390,
+				Title:       "Surface fallback diagnostic",
+				Description: "Print to stderr",
+				Suggestion:  "fmt.Fprintf(os.Stderr, ...)",
+			},
+		},
+	}
+
+	report := GenerateMarkdownReport(res)
+	if !strings.Contains(report, "### 1. Surface fallback diagnostic `internal/git/github.go#L384-L390`") {
+		t.Errorf("expected multi-line anchor in Suggestions section, got:\n%s", report)
+	}
+	if !strings.Contains(report, "#### `internal/git/github.go#L384-L390` (select lines 384–390 on diff)") {
+		t.Errorf("expected multi-line anchor in Ready-to-Copy comments section, got:\n%s", report)
+	}
+}

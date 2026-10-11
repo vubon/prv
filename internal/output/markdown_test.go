@@ -155,3 +155,48 @@ func TestGenerateMarkdownReport_FileWalkthroughs(t *testing.T) {
 		t.Errorf("expected report without walkthroughs to omit section header")
 	}
 }
+
+func TestBuildReviewPayload(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle: "Review Payload Test",
+		Branch:  "feat/test",
+		Verdict: models.VerdictApprove,
+		Issues: []models.Issue{
+			{
+				Dimension: "Security",
+				File:      "auth.go",
+				LineStart: 10,
+				Severity:  models.SeverityBlocking,
+				Title:     "Token leak",
+			},
+		},
+	}
+
+	payload := BuildReviewPayload(res)
+	if payload.Event != "APPROVE" {
+		t.Errorf("expected event APPROVE, got %s", payload.Event)
+	}
+	if len(payload.Comments) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(payload.Comments))
+	}
+	if payload.Comments[0].Path != "auth.go" || payload.Comments[0].Line != 10 {
+		t.Errorf("unexpected comment details: %+v", payload.Comments[0])
+	}
+	if !strings.Contains(payload.Body, "Review Payload Test") {
+		t.Error("expected PR title in payload body")
+	}
+
+	// Test REQUEST_CHANGES event mapping
+	res.Verdict = models.VerdictRequestChanges
+	payloadChanges := BuildReviewPayload(res)
+	if payloadChanges.Event != "REQUEST_CHANGES" {
+		t.Errorf("expected event REQUEST_CHANGES, got %s", payloadChanges.Event)
+	}
+
+	// Test default COMMENT event mapping
+	res.Verdict = "UNKNOWN"
+	payloadComment := BuildReviewPayload(res)
+	if payloadComment.Event != "COMMENT" {
+		t.Errorf("expected default event COMMENT, got %s", payloadComment.Event)
+	}
+}

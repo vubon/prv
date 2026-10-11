@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/vubon/prv/internal/models"
 )
 
 func TestNewGitHubClient(t *testing.T) {
@@ -260,5 +262,114 @@ func TestFetchPRViaAPI_MockServer(t *testing.T) {
 	}
 	if !strings.Contains(diff, "diff --git a/main.go b/main.go") {
 		t.Errorf("unexpected diff returned: %q", diff)
+	}
+}
+
+func TestResolveRepoAndPR(t *testing.T) {
+	client := &GitHubClient{}
+
+	// Test URL parsing
+	owner, repo, num, err := client.ResolveRepoAndPR("https://github.com/vubon/prv/pull/42", "")
+	if err != nil || owner != "vubon" || repo != "prv" || num != 42 {
+		t.Fatalf("unexpected ResolveRepoAndPR result: %s/%s#%d, err: %v", owner, repo, num, err)
+	}
+
+	// Empty string should error
+	if _, _, _, err := client.ResolveRepoAndPR("", ""); err == nil {
+		t.Error("expected error for empty PR identifier, got nil")
+	}
+
+	// Non-numeric string should error
+	if _, _, _, err := client.ResolveRepoAndPR("not-a-number", ""); err == nil {
+		t.Error("expected error for non-numeric identifier, got nil")
+	}
+}
+
+func TestPostPRReview_ValidationErrors(t *testing.T) {
+	client := &GitHubClient{Token: "test-token"}
+
+	// Nil payload
+	if err := client.PostPRReview("42", nil, ""); err == nil {
+		t.Error("expected error for nil payload, got nil")
+	}
+
+	// Empty body and empty comments
+	emptyPayload := &models.PullRequestReviewPayload{Body: "", Comments: nil}
+	if err := client.PostPRReview("42", emptyPayload, ""); err == nil {
+		t.Error("expected error for empty body and comments, got nil")
+	}
+}
+
+func TestPostPRReviewViaAPI_MockServer(t *testing.T) {
+	var receivedPayload models.PullRequestReviewPayload
+	var authHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 999, "state": "APPROVED"}`))
+	}))
+	defer server.Close()
+
+	client := &GitHubClient{
+		Token:   "secret-review-token",
+		BaseURL: server.URL,
+	}
+
+	payload := &models.PullRequestReviewPayload{
+		Body:  "Overall executive review summary",
+		Event: "APPROVE",
+		Comments: []models.InlineReviewComment{
+			{
+				Path: "pkg/auth.go",
+				Line: 25,
+				Side: "RIGHT",
+				Body: "🚨 **blocking (nil-check):** Check for nil",
+			},
+		},
+	}
+
+	err := client.PostPRReviewViaAPI("vubon", "prv", 42, payload)
+	if err != nil {
+		t.Fatalf("PostPRReviewViaAPI failed: %v", err)
+	}
+
+	if authHeader != "Bearer secret-review-token" {
+		t.Errorf("expected Bearer secret-review-token, got %q", authHeader)
+	}
+	if receivedPayload.Event != "APPROVE" {
+		t.Errorf("expected Event APPROVE, got %q", receivedPayload.Event)
+	}
+	if receivedPayload.Body != "Overall executive review summary" {
+		t.Errorf("unexpected body: %q", receivedPayload.Body)
+	}
+	if len(receivedPayload.Comments) != 1 || receivedPayload.Comments[0].Path != "pkg/auth.go" || receivedPayload.Comments[0].Line != 25 {
+		t.Errorf("unexpected inline comments: %+v", receivedPayload.Comments)
+	}
+
+	// Test HTTP error status handling
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"message": "Pull request review thread line must be part of the diff"}`))
+	}))
+	defer errServer.Close()
+
+	errClient := &GitHubClient{
+		Token:   "secret-token",
+		BaseURL: errServer.URL,
+	}
+	if err := errClient.PostPRReviewViaAPI("vubon", "prv", 42, payload); err == nil {
+		t.Error("expected error for HTTP 422, got nil")
 	}
 }

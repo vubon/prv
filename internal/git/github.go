@@ -250,6 +250,35 @@ func ParseRepoFromRemoteURL(remoteURL string) (owner, repo string, err error) {
 	return "", "", fmt.Errorf("cannot parse owner and repo from remote URL: %s", remoteURL)
 }
 
+// ResolveRepoAndPR extracts owner, repo, and PR number from a PR URL or integer string,
+// inferring owner and repo from the local git remote if a plain number is given.
+func (c *GitHubClient) ResolveRepoAndPR(prOrURL string, repoPath string) (owner, repo string, number int, err error) {
+	trimmed := strings.TrimSpace(prOrURL)
+	if trimmed == "" {
+		return "", "", 0, fmt.Errorf("PR identifier (number or URL) cannot be empty")
+	}
+
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		return ParsePRURL(trimmed)
+	}
+
+	number, numErr := strconv.Atoi(trimmed)
+	if numErr != nil {
+		return "", "", 0, fmt.Errorf("invalid PR identifier: %s", prOrURL)
+	}
+
+	if repoPath != "" {
+		runner := NewGitRunner(repoPath)
+		if remoteURL, rErr := runner.GetRemoteURL(); rErr == nil {
+			if o, r, pErr := ParseRepoFromRemoteURL(remoteURL); pErr == nil {
+				return o, r, number, nil
+			}
+		}
+	}
+
+	return "", "", number, fmt.Errorf("cannot infer repository owner and repo from git remote for PR %d (try passing full PR URL)", number)
+}
+
 // PostPRComment posts a review comment to a pull request using either gh CLI or the REST API.
 func (c *GitHubClient) PostPRComment(prOrURL string, commentBody string, repoPath string) error {
 	if strings.TrimSpace(commentBody) == "" {
@@ -271,23 +300,11 @@ func (c *GitHubClient) PostPRComment(prOrURL string, commentBody string, repoPat
 
 	// Fallback to GitHub REST API if GITHUB_TOKEN is available
 	if c.Token != "" {
-		if strings.HasPrefix(prOrURL, "http://") || strings.HasPrefix(prOrURL, "https://") {
-			owner, repo, number, err := ParsePRURL(prOrURL)
-			if err != nil {
-				return err
-			}
-			return c.PostPRCommentViaAPI(owner, repo, number, commentBody)
+		owner, repo, number, err := c.ResolveRepoAndPR(prOrURL, repoPath)
+		if err != nil {
+			return err
 		}
-
-		// If a plain PR number was provided, attempt to infer owner and repo from local git remote
-		if number, numErr := strconv.Atoi(prOrURL); numErr == nil && repoPath != "" {
-			runner := NewGitRunner(repoPath)
-			if remoteURL, rErr := runner.GetRemoteURL(); rErr == nil {
-				if owner, repo, pErr := ParseRepoFromRemoteURL(remoteURL); pErr == nil {
-					return c.PostPRCommentViaAPI(owner, repo, number, commentBody)
-				}
-			}
-		}
+		return c.PostPRCommentViaAPI(owner, repo, number, commentBody)
 	}
 
 	return fmt.Errorf("failed to post PR comment: neither GitHub CLI 'gh' succeeded nor valid GITHUB_TOKEN was available")
@@ -342,6 +359,113 @@ func (c *GitHubClient) PostPRCommentViaAPI(owner, repo string, prNumber int, com
 	if res.StatusCode != http.StatusCreated {
 		errBody, _ := io.ReadAll(res.Body)
 		return fmt.Errorf("github comment API returned HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(errBody)))
+	}
+	return nil
+}
+
+// PostPRReview posts a Pull Request Review (with optional inline comments) using either gh CLI or the REST API.
+func (c *GitHubClient) PostPRReview(prOrURL string, payload *models.PullRequestReviewPayload, repoPath string) error {
+	if payload == nil {
+		return fmt.Errorf("review payload cannot be nil")
+	}
+	if strings.TrimSpace(payload.Body) == "" && len(payload.Comments) == 0 {
+		return fmt.Errorf("review payload must contain either a body or inline comments")
+	}
+
+	owner, repo, number, err := c.ResolveRepoAndPR(prOrURL, repoPath)
+	if err != nil {
+		return err
+	}
+
+	// Try gh CLI first if available
+	if _, lookErr := exec.LookPath("gh"); lookErr == nil {
+		if cliErr := c.PostPRReviewViaCLI(owner, repo, number, payload, repoPath); cliErr == nil {
+			return nil
+		} else if len(payload.Comments) > 0 && strings.Contains(strings.ToLower(cliErr.Error()), "diff") {
+			// If inline comments failed due to diff anchoring mismatch, retry without inline comments as fallback
+			fallbackPayload := *payload
+			fallbackPayload.Comments = nil
+			if retryErr := c.PostPRReviewViaCLI(owner, repo, number, &fallbackPayload, repoPath); retryErr == nil {
+				return nil
+			}
+		} else if c.Token == "" {
+			return cliErr
+		}
+	}
+
+	// Fallback to GitHub REST API if GITHUB_TOKEN is available
+	if c.Token != "" {
+		apiErr := c.PostPRReviewViaAPI(owner, repo, number, payload)
+		if apiErr == nil {
+			return nil
+		}
+		if len(payload.Comments) > 0 && strings.Contains(strings.ToLower(apiErr.Error()), "422") {
+			fallbackPayload := *payload
+			fallbackPayload.Comments = nil
+			if retryErr := c.PostPRReviewViaAPI(owner, repo, number, &fallbackPayload); retryErr == nil {
+				return nil
+			}
+		}
+		return apiErr
+	}
+
+	return fmt.Errorf("failed to post PR review: neither GitHub CLI 'gh' succeeded nor valid GITHUB_TOKEN was available")
+}
+
+// PostPRReviewViaCLI publishes a PR review with inline comments using `gh api repos/<owner>/<repo>/pulls/<number>/reviews --input -`.
+func (c *GitHubClient) PostPRReviewViaCLI(owner, repo string, prNumber int, payload *models.PullRequestReviewPayload, repoPath string) error {
+	if _, lookErr := exec.LookPath("gh"); lookErr != nil {
+		return fmt.Errorf("GitHub CLI 'gh' is not installed or not in $PATH")
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal review payload: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, prNumber)
+	cmd := exec.Command("gh", "api", endpoint, "--input", "-")
+	if repoPath != "" {
+		cmd.Dir = repoPath
+	}
+	cmd.Stdin = bytes.NewReader(payloadBytes)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("gh api PR review failed: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// PostPRReviewViaAPI publishes a PR review with inline comments directly via the GitHub REST API.
+func (c *GitHubClient) PostPRReviewViaAPI(owner, repo string, prNumber int, payload *models.PullRequestReviewPayload) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews", c.baseURL(), owner, repo, prNumber)
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal review payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(payloadBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("github review API request failed: %w", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusCreated {
+		errBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("github review API returned HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 	return nil
 }

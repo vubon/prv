@@ -138,3 +138,20 @@ func SaveReportToFile(res *models.ReviewResult, outputDir string) (string, error
 
 	return filePath, nil
 }
+
+// BuildReviewPayload constructs a GitHub PullRequestReviewPayload from a ReviewResult.
+func BuildReviewPayload(res *models.ReviewResult) *models.PullRequestReviewPayload {
+	event := "COMMENT"
+	switch strings.ToUpper(res.Verdict) {
+	case models.VerdictApprove:
+		event = "APPROVE"
+	case models.VerdictRequestChanges:
+		event = "REQUEST_CHANGES"
+	}
+
+	return &models.PullRequestReviewPayload{
+		Body:     GenerateMarkdownReport(res),
+		Event:    event,
+		Comments: GenerateInlineComments(res),
+	}
+}

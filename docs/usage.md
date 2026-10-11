@@ -116,6 +116,9 @@ prv report --file review-result.json --copy
 # Publish review report directly as a comment on GitHub PR
 prv report --file review-result.json --pr 42 --post
 prv report -f review-result.json --pr https://github.com/org/repo/pull/42 --post
+
+# Publish complete GitHub Pull Request Review with line-level inline comments on the diff
+prv report --file review-result.json --pr 42 --post --inline
 ```
 
 ### 6. Auto-Generated Architecture & Flow Diagrams (Mermaid)

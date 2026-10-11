@@ -46,6 +46,7 @@ Examples:
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
   prv bundle --config custom-rules.yaml -o bundle.md
   prv report --file review.json --pr 42 --post
+  prv report --file review.json --pr 42 --post --inline
   prv report --file review.json --copy
   prv init
   prv matrix
@@ -186,8 +187,12 @@ func runReport(args []string) {
 	fs.StringVar(&prID, "pr", "", "Target PR number or full GitHub PR URL (required when using --post unless specified in JSON)")
 
 	var postComment bool
-	fs.BoolVar(&postComment, "post", false, "Post generated review report directly as a comment on GitHub PR")
+	fs.BoolVar(&postComment, "post", false, "Post generated review report directly to GitHub PR")
 	fs.BoolVar(&postComment, "p", false, "Alias for --post")
+
+	var inlineReview bool
+	fs.BoolVar(&inlineReview, "inline", false, "Publish review with line-level inline comments on PR diff (GitHub Review API)")
+	fs.BoolVar(&inlineReview, "i", false, "Alias for --inline")
 
 	fs.BoolVar(&copyClip, "copy", false, "Copy formatted comments to clipboard")
 	fs.BoolVar(&copyClip, "c", false, "Alias for --copy")
@@ -236,13 +241,35 @@ func runReport(args []string) {
 			os.Exit(1)
 		}
 
-		reportContent := output.GenerateMarkdownReport(&res)
 		ghClient := git.NewGitHubClient()
-		if postErr := ghClient.PostPRComment(targetPR, reportContent, "."); postErr != nil {
-			fmt.Fprintf(os.Stderr, "Error posting review comment to PR %s: %v\n", targetPR, postErr)
-			os.Exit(1)
+		payload := output.BuildReviewPayload(&res)
+
+		// If inline was explicitly requested OR if the review contains line-level issues/suggestions,
+		// publish as a GitHub PR Review with inline comments.
+		if inlineReview || len(payload.Comments) > 0 {
+			if reviewErr := ghClient.PostPRReview(targetPR, payload, "."); reviewErr != nil {
+				// Gracefully fall back to standard PR comment if review creation failed
+				reportContent := output.GenerateMarkdownReport(&res)
+				if commentErr := ghClient.PostPRComment(targetPR, reportContent, "."); commentErr != nil {
+					fmt.Fprintf(os.Stderr, "Error posting review to PR %s: %v\n", targetPR, reviewErr)
+					os.Exit(1)
+				}
+				fmt.Printf("Successfully published review report as a comment on PR %s (fallback from review API)!\n", targetPR)
+			} else {
+				if len(payload.Comments) > 0 {
+					fmt.Printf("Successfully published PR review with %d inline comments on PR %s (Verdict: %s)!\n", len(payload.Comments), targetPR, payload.Event)
+				} else {
+					fmt.Printf("Successfully published PR review on PR %s (Verdict: %s)!\n", targetPR, payload.Event)
+				}
+			}
+		} else {
+			reportContent := output.GenerateMarkdownReport(&res)
+			if postErr := ghClient.PostPRComment(targetPR, reportContent, "."); postErr != nil {
+				fmt.Fprintf(os.Stderr, "Error posting review comment to PR %s: %v\n", targetPR, postErr)
+				os.Exit(1)
+			}
+			fmt.Printf("Successfully published review report as a comment on PR %s!\n", targetPR)
 		}
-		fmt.Printf("Successfully published review report as a comment on PR %s!\n", targetPR)
 	}
 
 	if copyClip {

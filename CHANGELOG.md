@@ -3,6 +3,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0-alpha] — 2026-10-11
+
+### Added
+- **GitHub Pull Request Reviews & Inline Diff Comments (`internal/git/github.go`)**:
+  - Implemented `PostPRReview`, `PostPRReviewViaCLI`, and `PostPRReviewViaAPI`.
+  - Added support for publishing full GitHub PR Reviews via `POST /repos/{owner}/{repo}/pulls/{number}/reviews` and `gh api`.
+  - Publishes line-level inline comments pinned directly to modified code lines in GitHub's "Files changed" diff tab.
+  - Added graceful 422 diff-anchoring fallback that resends reviews without inline comments if lines fall outside the active PR diff.
+  - Implemented `ResolveRepoAndPR` for unified remote inference and PR target resolution.
+- **Conventional Comments Formatting Standard (`internal/output/comments.go`)**:
+  - Aligned `FormatConventionalComment` strictly with the Conventional Comments specification: `<label> [decorations] (<subject>): <title>`.
+  - Added support for `Subject` field in `models.Issue` and `models.Suggestion` (e.g. `(nil-check)`, `(sqli)`, `(naming)`).
+  - Added support for Question (`❓ question`) and Praise (`👏 praise`) labels.
+  - Implemented `GenerateInlineComments` and `BuildReviewPayload` for structured review generation.
+- **CLI Command Support (`prv report --inline`)**:
+  - Added `--inline` / `-i` flag to `prv report`.
+  - Automatically posts GitHub Pull Request Reviews with inline diff comments whenever line-level issues or suggestions exist.
+- **Comprehensive Unit Testing Suite**:
+  - Added tests for `ResolveRepoAndPR`, `PostPRReview` validation, and `PostPRReviewViaAPI` with mock server in `internal/git/github_test.go`.
+  - Added tests for subject overrides, question/praise labels, and `GenerateInlineComments` in `internal/output/comments_test.go`.
+  - Added `TestBuildReviewPayload` in `internal/output/markdown_test.go`.
+
+---
+
 ## [0.6.0-alpha] — 2026-10-10
 
 ### Added

@@ -155,3 +155,76 @@ func TestGenerateMarkdownReport_FileWalkthroughs(t *testing.T) {
 		t.Errorf("expected report without walkthroughs to omit section header")
 	}
 }
+
+func TestBuildReviewPayload(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle: "Review Payload Test",
+		Branch:  "feat/test",
+		Verdict: models.VerdictApprove,
+		Issues: []models.Issue{
+			{
+				Dimension: "Security",
+				File:      "auth.go",
+				LineStart: 10,
+				Severity:  models.SeverityBlocking,
+				Title:     "Token leak",
+			},
+		},
+	}
+
+	payload := BuildReviewPayload(res)
+	if payload.Event != "APPROVE" {
+		t.Errorf("expected event APPROVE, got %s", payload.Event)
+	}
+	if len(payload.Comments) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(payload.Comments))
+	}
+	if payload.Comments[0].Path != "auth.go" || payload.Comments[0].Line != 10 {
+		t.Errorf("unexpected comment details: %+v", payload.Comments[0])
+	}
+	if !strings.Contains(payload.Body, "Review Payload Test") {
+		t.Error("expected PR title in payload body")
+	}
+
+	// Test REQUEST_CHANGES event mapping
+	res.Verdict = models.VerdictRequestChanges
+	payloadChanges := BuildReviewPayload(res)
+	if payloadChanges.Event != "REQUEST_CHANGES" {
+		t.Errorf("expected event REQUEST_CHANGES, got %s", payloadChanges.Event)
+	}
+
+	// Test default COMMENT event mapping
+	res.Verdict = "UNKNOWN"
+	payloadComment := BuildReviewPayload(res)
+	if payloadComment.Event != "COMMENT" {
+		t.Errorf("expected default event COMMENT, got %s", payloadComment.Event)
+	}
+}
+
+func TestGenerateMarkdownReport_MultiLineAnchor(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle: "MultiLine Anchor PR",
+		Branch:  "feat/anchor",
+		Verdict: models.VerdictApprove,
+		Suggestions: []models.Suggestion{
+			{
+				Dimension:   "Observability",
+				Subject:     "error-diagnostics",
+				File:        "internal/git/github.go",
+				LineStart:   384,
+				LineEnd:     390,
+				Title:       "Surface fallback diagnostic",
+				Description: "Print to stderr",
+				Suggestion:  "fmt.Fprintf(os.Stderr, ...)",
+			},
+		},
+	}
+
+	report := GenerateMarkdownReport(res)
+	if !strings.Contains(report, "### 1. Surface fallback diagnostic `internal/git/github.go#L384-L390`") {
+		t.Errorf("expected multi-line anchor in Suggestions section, got:\n%s", report)
+	}
+	if !strings.Contains(report, "#### `internal/git/github.go#L384-L390` (select lines 384–390 on diff)") {
+		t.Errorf("expected multi-line anchor in Ready-to-Copy comments section, got:\n%s", report)
+	}
+}

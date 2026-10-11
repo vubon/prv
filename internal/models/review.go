@@ -27,7 +27,8 @@ const (
 
 // Issue represents a bug, risk, or security finding.
 type Issue struct {
-	Dimension   string `json:"dimension"` // e.g. "Logic", "Security", "Performance"
+	Dimension   string `json:"dimension"`         // e.g. "Logic", "Security", "Performance"
+	Subject     string `json:"subject,omitempty"` // Conventional comments subject, e.g. "nil-check", "sqli", "off-by-one"
 	File        string `json:"file"`
 	LineStart   int    `json:"line_start"`
 	LineEnd     int    `json:"line_end,omitempty"`
@@ -41,6 +42,7 @@ type Issue struct {
 // Suggestion represents an improvement or clean code tip.
 type Suggestion struct {
 	Dimension   string `json:"dimension"`
+	Subject     string `json:"subject,omitempty"` // Conventional comments subject, e.g. "naming", "idiom", "refactor"
 	File        string `json:"file"`
 	LineStart   int    `json:"line_start"`
 	LineEnd     int    `json:"line_end,omitempty"`
@@ -83,6 +85,25 @@ type FileWalkthrough struct {
 type FormattedComment struct {
 	File         string `json:"file"`
 	Line         int    `json:"line"`
+	LineEnd      int    `json:"line_end,omitempty"`
 	Label        string `json:"label"` // e.g. "⚠️ [bug]", "🔒 [security]", "⚡ [performance]"
 	MarkdownBody string `json:"markdown_body"`
+}
+
+// InlineReviewComment represents an inline comment on a specific line of a pull request diff.
+type InlineReviewComment struct {
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Side      string `json:"side,omitempty"` // "RIGHT" (default) or "LEFT"
+	StartLine int    `json:"start_line,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+	Body      string `json:"body"`
+}
+
+// PullRequestReviewPayload represents the payload to create a GitHub Pull Request Review.
+type PullRequestReviewPayload struct {
+	CommitID string                `json:"commit_id,omitempty"`
+	Body     string                `json:"body"`
+	Event    string                `json:"event"` // "APPROVE", "REQUEST_CHANGES", "COMMENT"
+	Comments []InlineReviewComment `json:"comments,omitempty"`
 }

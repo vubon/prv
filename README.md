@@ -19,7 +19,8 @@
 [Quickstart](#-quickstart--workflows) •
 [CLI Reference](#-cli-command-reference) •
 [Configuration](#-configuration-prvyaml) •
-[AI Pairing](#-pairing-with-ai-agents)
+[AI Pairing](#-pairing-with-ai-agents) •
+[Contributing](#-contributing)
 
 </div>
 
@@ -345,6 +346,14 @@ make coverage-html
 # Build binary
 make build
 ```
+
+---
+
+## 🤝 Contributing
+
+Contributions, bug reports, and feature proposals are welcome! Please check out:
+- [Contributing Guide](CONTRIBUTING.md) for local development setup, testing, and PR conventions.
+- [Code of Conduct](CODE_OF_CONDUCT.md) for our community standards.
 
 ---
 

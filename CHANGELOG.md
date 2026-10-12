@@ -3,6 +3,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0-alpha] — 2026-10-12
+
+### Added
+- **Production-Grade GitHub Actions CI/CD Pipeline (`.github/workflows/ci.yml`)**:
+  - Triggers on Pull Requests to `main` and pushes/merges to `main`.
+  - Enforces code formatting via `gofmt` and runs static analysis with `go vet` and `golangci-lint`.
+  - Multi-OS test matrix across **Ubuntu**, **macOS**, and **Windows** on Go 1.26.x and 1.27.x with Go race detector (`-race`).
+  - Code coverage reporting with `coverage.out` artifact uploads.
+  - Quick compilation and smoke test step (`--version`, `--help`).
+- **Automated Cross-Platform Release Workflow (`.github/workflows/release.yml`)**:
+  - Automatically compiles stripped static binaries (`CGO_ENABLED=0`) across 5 platforms (`darwin/arm64`, `darwin/amd64`, `linux/amd64`, `linux/arm64`, `windows/amd64`).
+  - Packages `.tar.gz` and `.zip` archives with SHA-256 `checksums.txt`.
+  - Automatically publishes assets to GitHub Releases via `softprops/action-gh-release@v2`.
+- **Comprehensive Modern `README.md`**:
+  - Added CI build, release, Go version, Conventional Comments, and MIT license badges.
+  - Clear "Why prv?" problem statement detailing diff noise reduction.
+  - Interactive Mermaid architecture impact diagram demonstration.
+  - 5 core workflows with copy-ready CLI commands (pre-commit reviews, diagrams, walkthroughs, review reporting).
+  - Conventional Comments 8-label quick reference table with drop-in suggestion blocks.
+  - Human-in-the-loop AI pairing architecture diagram and guidelines.
+  - Complete `.prv.yaml` schema and CLI flag reference table.
+- **Community Guidelines & Licensing**:
+  - Added [`CONTRIBUTING.md`](CONTRIBUTING.md) detailing development setup, testing, pre-commit self-reviews, and Conventional Commits.
+  - Added [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) adhering to Contributor Covenant v2.1.
+  - Added standard MIT [`LICENSE`](LICENSE).
+
+---
+
 ## [0.7.0-alpha] — 2026-10-11
 
 ### Added

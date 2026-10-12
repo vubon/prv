@@ -25,7 +25,7 @@ prv version
 > `xattr -d com.apple.quarantine /usr/local/bin/prv`
 
 ### Option 2: Using `go install` (Go Developers)
-If you have Go 1.22+ installed, install directly into `$GOPATH/bin`:
+If you have Go 1.26+ installed, install directly into `$GOPATH/bin`:
 
 ```bash
 go install github.com/vubon/prv/cmd/prv@latest

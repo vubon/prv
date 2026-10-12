@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-binaries:
+    name: Build & Publish Release Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Build and Package Cross-Platform Binaries
+        run: |
+          mkdir -p dist
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          
+          PLATFORMS=(
+            "darwin/amd64"
+            "darwin/arm64"
+            "linux/amd64"
+            "linux/arm64"
+            "windows/amd64"
+          )
+          
+          for PLATFORM in "${PLATFORMS[@]}"; do
+            OS="${PLATFORM%/*}"
+            ARCH="${PLATFORM#*/}"
+            BIN_NAME="prv"
+            ARCHIVE_NAME="prv_${OS}_${ARCH}"
+            
+            if [ "$OS" = "windows" ]; then
+              BIN_NAME="prv.exe"
+            fi
+            
+            echo "Building $OS/$ARCH..."
+            CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build -ldflags="-s -w" -o "dist/$BIN_NAME" cmd/prv/main.go
+            
+            cd dist
+            if [ "$OS" = "windows" ]; then
+              zip "${ARCHIVE_NAME}.zip" "$BIN_NAME"
+            else
+              tar -czf "${ARCHIVE_NAME}.tar.gz" "$BIN_NAME"
+            fi
+            rm -f "$BIN_NAME"
+            cd ..
+          done
+
+      - name: Generate SHA256 Checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+          cd ..
+
+      - name: Publish GitHub Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true

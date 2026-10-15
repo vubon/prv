@@ -17,11 +17,12 @@ type Config struct {
 
 // ReviewConfig contains rules, sensitive paths, persona, and strictness.
 type ReviewConfig struct {
-	Persona        string           `yaml:"persona"` // e.g. "staff-advisory", "strict-linter", "mentor"
-	Strictness     StrictnessConfig `yaml:"strictness"`
-	SensitivePaths []string         `yaml:"sensitive_paths"` // Directories requiring extra security scrutiny
-	CustomRules    []string         `yaml:"custom_rules"`    // Team rules injected into review prompts
-	IgnorePatterns []string         `yaml:"ignore_patterns"` // Extra file glob patterns to filter out
+	Persona           string           `yaml:"persona"`             // e.g. "staff-advisory", "strict-linter", "mentor"
+	DefaultBaseBranch string           `yaml:"default_base_branch"` // e.g. "main", "staging", "dev", "develop"
+	Strictness        StrictnessConfig `yaml:"strictness"`
+	SensitivePaths    []string         `yaml:"sensitive_paths"` // Directories requiring extra security scrutiny
+	CustomRules       []string         `yaml:"custom_rules"`    // Team rules injected into review prompts
+	IgnorePatterns    []string         `yaml:"ignore_patterns"` // Extra file glob patterns to filter out
 }
 
 // StrictnessConfig defines blocking criteria for review verdicts.
@@ -193,6 +194,9 @@ version: "1"
 review:
   # Review persona: "staff-advisory" (default) | "strict-linter" | "mentor"
   persona: "staff-advisory"
+
+  # Default base branch to compare against (defaults to main/master if omitted)
+  # default_base_branch: "staging"
 
   # Strictness settings for verdicts
   strictness:

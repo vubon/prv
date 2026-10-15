@@ -34,13 +34,17 @@ Before analyzing raw diffs or re-evaluating existing PRs:
 ## 🟢 MANDATORY PR BUNDLE WORKFLOW
 When requested to review a branch or Pull Request:
 1. Generate the review bundle via prv:
-   - For local branch: `./bin/prv bundle --branch <branch_name>`
+   - For current branch against custom base branch: `./bin/prv bundle --base <base_branch>` (e.g., `staging`, `dev`, `develop`)
+   - For local branch against custom base: `./bin/prv bundle --branch <branch_name> --base <base_branch>`
+   - For local branch against default base: `./bin/prv bundle --branch <branch_name>`
+   - For staged uncommitted changes: `./bin/prv bundle --staged`
    - For remote GitHub PR: `./bin/prv bundle --pr <pr_url_or_number>`
    - For custom rules: `./bin/prv bundle --config .prv.yaml`
 2. Evaluate the bundle against the 9-Dimension Engineering Evaluation Matrix.
 3. Every review report MUST explicitly highlight:
    - **🎯 The Weakest Link in the Change** (how the change will fail under stress)
    - **⚖️ Architectural Trade-offs** (what compromises were made)
+   - **🗺️ Architecture & Component Impact Diagram** (Mermaid graph generated via `prv diagram --markdown` or bundle context)
 4. Format line-level findings using Conventional Comments (`🚨 blocking`, `⚠️ issue`, `🔒 security`, `⚡ performance`, `💡 suggestion`, `🔍 nit`) with exact file paths (`path/file.go#L42`) and copy-ready ` ```suggestion ` blocks.
 5. Save the report to `reviews/<YYYY-MM-DD>-<branch>.md`.
 
@@ -76,7 +80,7 @@ description: Autonomous Pull Request reviewer using the prv Go context engine an
 When the user asks to review code:
 1. Run `prv bundle --staged` (for pre-commit self-review), `prv bundle --branch <name>`, or `prv bundle --pr <number>`.
 2. Review unified diffs with active team standards from `.prv.yaml`.
-3. Format output per the 9 dimensions and Conventional Comments.
+3. Generate Mermaid architecture diagram (`prv diagram --markdown`) and format output per the 9 dimensions and Conventional Comments.
 4. Save report in `reviews/<YYYY-MM-DD>-<branch>.md` and persist summary to KacheDB.
 5. **Publishing Safeguard (Human-in-the-Loop):** Present findings in chat first. Do NOT run `prv report --post` or `gh pr comment` until the user explicitly requests to publish.
 ```
@@ -90,7 +94,9 @@ Once configured, invoke Antigravity with natural prompts:
 ```
 "Review my staged changes before I commit"
 "Run a pre-commit review with prv"
-"Review branch feat/payment-gateway"
+"Review current branch against staging"
+"Review current branch against dev"
+"Review branch feat/payment-gateway against staging"
 "Review PR #42 with prv"
 "Check our sensitive paths in PR https://github.com/org/repo/pull/10"
 "Post the review comment to PR #42"

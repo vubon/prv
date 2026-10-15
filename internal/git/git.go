@@ -3,9 +3,12 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/vubon/prv/internal/models"
 )
@@ -38,6 +41,44 @@ func (g *GitRunner) runCmd(args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// runCmdWithTimeout executes a git command in the repository path with an explicit timeout
+// and optional environment variables.
+func (g *GitRunner) runCmdWithTimeout(timeout time.Duration, extraEnv []string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = g.RepoPath
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w (stderr: %s)", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// ValidateRefName checks that a branch or ref name is safe to pass to git arguments
+// to prevent option injection (e.g. names starting with '-') or illegal characters.
+func ValidateRefName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return fmt.Errorf("branch or revision name cannot be empty")
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("invalid branch name %q: cannot start with a dash", name)
+	}
+	if strings.ContainsAny(trimmed, " \t\n~^:?*[\\") || strings.Contains(trimmed, "..") {
+		return fmt.Errorf("invalid branch name %q: contains illegal git ref characters", name)
+	}
+	return nil
+}
+
 // IsGitRepo checks if the path is a valid git repository.
 func (g *GitRunner) IsGitRepo() bool {
 	_, err := g.runCmd("rev-parse", "--is-inside-work-tree")
@@ -54,7 +95,7 @@ func (g *GitRunner) GetRemoteURL() (string, error) {
 	return g.runCmd("config", "--get", "remote.origin.url")
 }
 
-// GetDefaultBaseBranch attempts to detect origin/main or origin/master.
+// GetDefaultBaseBranch attempts to detect default base branch (symbolic-ref, main, master, develop, dev, staging).
 func (g *GitRunner) GetDefaultBaseBranch() string {
 	// Try origin HEAD symbolic ref
 	ref, err := g.runCmd("symbolic-ref", "refs/remotes/origin/HEAD")
@@ -65,49 +106,94 @@ func (g *GitRunner) GetDefaultBaseBranch() string {
 		}
 	}
 
-	// Try checking if 'main' or 'master' exists locally or remotely
-	if _, err := g.runCmd("rev-parse", "--verify", "origin/main"); err == nil {
-		return "main"
-	}
-	if _, err := g.runCmd("rev-parse", "--verify", "main"); err == nil {
-		return "main"
-	}
-	if _, err := g.runCmd("rev-parse", "--verify", "origin/master"); err == nil {
-		return "master"
-	}
-	if _, err := g.runCmd("rev-parse", "--verify", "master"); err == nil {
-		return "master"
+	// Try checking common default branch names in order of prevalence
+	candidates := []string{"main", "master", "develop", "dev", "staging"}
+	for _, candidate := range candidates {
+		if _, err := g.runCmd("rev-parse", "--verify", "origin/"+candidate); err == nil {
+			return candidate
+		}
+		if _, err := g.runCmd("rev-parse", "--verify", candidate); err == nil {
+			return candidate
+		}
 	}
 
 	return "main"
 }
 
-// FetchOrigin runs git fetch to make sure remote branch refs are up-to-date.
+// FetchOrigin runs git fetch with a 15-second timeout and disables interactive terminal prompts.
 func (g *GitRunner) FetchOrigin() error {
-	_, err := g.runCmd("fetch", "origin")
+	_, err := g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin")
 	return err
 }
 
 // GetDiff runs git diff between base and head and returns parsed file changes.
 func (g *GitRunner) GetDiff(baseBranch, headBranch string, includeLocks bool) ([]models.FileChange, error) {
-	// Resolve base branch (e.g. origin/main if available)
-	baseRef := baseBranch
-	if _, err := g.runCmd("rev-parse", "--verify", "origin/"+baseBranch); err == nil {
-		baseRef = "origin/" + baseBranch
+	if headBranch != "" && headBranch != "HEAD" {
+		if err := ValidateRefName(headBranch); err != nil {
+			return nil, err
+		}
+	}
+	if baseBranch != "" {
+		if err := ValidateRefName(baseBranch); err != nil {
+			return nil, err
+		}
 	}
 
+	// Resolve head branch ref:
+	// Prioritize local branch if it exists (or HEAD) so unpushed local commits are included
 	headRef := headBranch
-	if _, err := g.runCmd("rev-parse", "--verify", "origin/"+headBranch); err == nil {
-		headRef = "origin/" + headBranch
+	if headRef == "" {
+		curr, err := g.GetCurrentBranch()
+		if err == nil && curr != "" {
+			headRef = curr
+		} else {
+			headRef = "HEAD"
+		}
 	}
 
-	// Run git diff baseRef...headRef
+	// If headRef does not exist locally as a branch or ref, check if origin/<headRef> exists
+	if _, err := g.runCmd("rev-parse", "--verify", headRef); err != nil && headRef != "HEAD" {
+		if _, err := g.runCmd("rev-parse", "--verify", "origin/"+headRef); err == nil {
+			headRef = "origin/" + headRef
+		}
+	}
+
+	// Resolve base branch ref:
+	if baseBranch == "" {
+		baseBranch = g.GetDefaultBaseBranch()
+	}
+	if err := ValidateRefName(baseBranch); err != nil {
+		return nil, err
+	}
+	baseRef := baseBranch
+
+	// Check if base branch exists remotely or locally
+	if _, err := g.runCmd("rev-parse", "--verify", "origin/"+baseRef); err == nil {
+		baseRef = "origin/" + baseRef
+	} else if _, err := g.runCmd("rev-parse", "--verify", baseRef); err == nil {
+		// Local branch / ref exists
+	} else {
+		// Attempt to fetch origin in case baseBranch was created or updated remotely (15s timeout, non-interactive)
+		_, _ = g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", baseBranch)
+		if _, err := g.runCmd("rev-parse", "--verify", "origin/"+baseBranch); err == nil {
+			baseRef = "origin/" + baseBranch
+		} else if _, err := g.runCmd("rev-parse", "--verify", baseBranch); err == nil {
+			baseRef = baseBranch
+		} else {
+			return nil, fmt.Errorf("base branch '%s' not found locally or on remote origin (checked '%s' and 'origin/%s')", baseBranch, baseBranch, baseBranch)
+		}
+	}
+
+	// Run git diff baseRef...headRef (three dots finds merge base)
 	diffOutput, err := g.runCmd("diff", fmt.Sprintf("%s...%s", baseRef, headRef))
 	if err != nil {
-		// Fallback to direct two-dot diff or local refs
-		diffOutput, err = g.runCmd("diff", fmt.Sprintf("%s..%s", baseBranch, headBranch))
+		// Fallback to direct two-dot diff or local refs (handles disconnected root commits or shallow clones)
+		diffOutput, err = g.runCmd("diff", fmt.Sprintf("%s..%s", baseRef, headRef))
 		if err != nil {
-			return nil, fmt.Errorf("could not compute diff between %s and %s: %w", baseBranch, headBranch, err)
+			diffOutput, err = g.runCmd("diff", fmt.Sprintf("%s..%s", baseBranch, headBranch))
+			if err != nil {
+				return nil, fmt.Errorf("could not compute diff between base '%s' and head '%s': %w", baseBranch, headBranch, err)
+			}
 		}
 	}
 

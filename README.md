@@ -120,10 +120,15 @@ prv bundle --staged --copy
 Prepare an AI-ready context bundle for a teammate's PR or branch:
 
 ```bash
-# By branch name (compares against main by default)
-prv bundle --branch feat/user-auth
+# Review current branch against custom base branch (staging, dev, develop)
+prv bundle --base staging
+prv bundle -B dev
 
-# Against a custom base branch
+# Positional syntax: compare feature branch against staging
+prv bundle feat/user-auth staging
+
+# By branch name (compares against main or .prv.yaml default)
+prv bundle --branch feat/user-auth
 prv bundle --branch feat/user-auth --base staging
 
 # By GitHub PR number or full URL
@@ -311,7 +316,7 @@ review_matrix:
 | Command | Flags | Description |
 | :--- | :--- | :--- |
 | `prv bundle` | `--branch, -b` | Target branch to compare against base. |
-| | `--base` | Base branch (default: `main`). |
+| | `--base, -B` | Base branch (default: `main` or `default_base_branch` in `.prv.yaml`). |
 | | `--staged, -s` | Bundle uncommitted staged git changes. |
 | | `--pr` | GitHub PR number or full URL. |
 | | `--output, -o` | Output file path (default: stdout). |

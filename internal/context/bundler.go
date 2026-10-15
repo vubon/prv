@@ -132,6 +132,12 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 	}
 
 	baseBranch := opts.BaseBranch
+	if baseBranch == "" && cfg != nil && cfg.Review.DefaultBaseBranch != "" {
+		if err := git.ValidateRefName(cfg.Review.DefaultBaseBranch); err != nil {
+			return nil, fmt.Errorf("invalid default_base_branch in configuration: %w", err)
+		}
+		baseBranch = cfg.Review.DefaultBaseBranch
+	}
 	if baseBranch == "" {
 		baseBranch = b.gitRunner.GetDefaultBaseBranch()
 	}
@@ -139,7 +145,8 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 	var meta *models.PRMetadata
 	var fileChanges []models.FileChange
 
-	// If user explicitly specified a custom base branch, compute diff locally against that base
+	// If user explicitly specified a custom base branch via CLI options,
+	// compute diff locally against that explicit base
 	if opts.BaseBranch != "" {
 		ghMeta, _, _ := b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
 		if ghMeta != nil {
@@ -178,8 +185,12 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		if headBranch == baseBranch {
 			desc += fmt.Sprintf("\n\nNote: Head branch '%s' is identical to base branch '%s' (0 changes).", headBranch, baseBranch)
 		}
+		title := fmt.Sprintf("Branch Review: %s", headBranch)
+		if headBranch != baseBranch {
+			title = fmt.Sprintf("Branch Review: %s (against %s)", headBranch, baseBranch)
+		}
 		meta = &models.PRMetadata{
-			Title:       fmt.Sprintf("Branch Review: %s", headBranch),
+			Title:       title,
 			Description: desc,
 			BaseBranch:  baseBranch,
 			HeadBranch:  headBranch,

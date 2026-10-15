@@ -21,8 +21,10 @@ When asked to review a branch, PR, or diff:
 
 1. **Generate Context Bundle:**
    Run the terminal command:
+   - For current branch against custom base: `prv bundle --base <base_branch>` (e.g., `staging`, `dev`)
    - For uncommitted staged changes: `prv bundle --staged`
-   - For local branches: `prv bundle --branch <branch_name>`
+   - For local branches against custom base: `prv bundle --branch <branch_name> --base <base_branch>`
+   - For local branches against default base: `prv bundle --branch <branch_name>`
    - For remote GitHub PRs: `prv bundle --pr <number_or_url>`
    
    If a custom `.prv.yaml` configuration is used:

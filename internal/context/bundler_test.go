@@ -279,3 +279,88 @@ func TestBundler_ToJSON(t *testing.T) {
 		t.Errorf("expected total_additions in JSON output, got:\n%s", jsonStr)
 	}
 }
+
+func runGitInDir(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test User",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test User",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s failed: %v, output: %s", strings.Join(args, " "), dir, err, string(out))
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestBundler_PrepareBundle_CustomBaseBranch(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cmd := exec.Command("git", "init", "-b", "main")
+	cmd.Dir = tempDir
+	if err := cmd.Run(); err != nil {
+		runGitInDir(t, tempDir, "init")
+		runGitInDir(t, tempDir, "checkout", "-b", "main")
+	}
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+
+	// Commit on main
+	_ = os.WriteFile(filepath.Join(tempDir, "base.txt"), []byte("base\n"), 0644)
+	runGitInDir(t, tempDir, "add", "base.txt")
+	runGitInDir(t, tempDir, "commit", "-m", "init main")
+
+	// Branch staging
+	runGitInDir(t, tempDir, "checkout", "-b", "staging")
+
+	// Branch feat/custom
+	runGitInDir(t, tempDir, "checkout", "-b", "feat/custom")
+	_ = os.WriteFile(filepath.Join(tempDir, "feature.go"), []byte("package feature\n"), 0644)
+	runGitInDir(t, tempDir, "add", "feature.go")
+	runGitInDir(t, tempDir, "commit", "-m", "feat: custom feature")
+
+	bundler := NewBundler(tempDir)
+
+	// Test 1: Explicit BaseBranch in options
+	opts := models.BundleOptions{
+		RepoPath:   tempDir,
+		BaseBranch: "staging",
+	}
+	ctx, err := bundler.PrepareBundle(opts)
+	if err != nil {
+		t.Fatalf("PrepareBundle with explicit base branch failed: %v", err)
+	}
+
+	if ctx.Metadata.BaseBranch != "staging" {
+		t.Errorf("expected BaseBranch 'staging', got %q", ctx.Metadata.BaseBranch)
+	}
+	if ctx.Metadata.HeadBranch != "feat/custom" {
+		t.Errorf("expected HeadBranch 'feat/custom', got %q", ctx.Metadata.HeadBranch)
+	}
+	if len(ctx.Files) != 1 || ctx.Files[0].Path != "feature.go" {
+		t.Errorf("expected 1 file change 'feature.go', got %v", ctx.Files)
+	}
+
+	// Test 2: default_base_branch from .prv.yaml config
+	cfgContent := `version: "1"
+review:
+  default_base_branch: "staging"
+`
+	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(cfgContent), 0644)
+
+	optsDefault := models.BundleOptions{
+		RepoPath: tempDir,
+	}
+	ctxDefault, err := bundler.PrepareBundle(optsDefault)
+	if err != nil {
+		t.Fatalf("PrepareBundle with config default_base_branch failed: %v", err)
+	}
+
+	if ctxDefault.Metadata.BaseBranch != "staging" {
+		t.Errorf("expected BaseBranch from config to be 'staging', got %q", ctxDefault.Metadata.BaseBranch)
+	}
+}

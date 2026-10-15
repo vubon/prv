@@ -157,3 +157,24 @@ func TestWriteDefaultConfig(t *testing.T) {
 		t.Error("expected error writing over existing config file")
 	}
 }
+
+func TestLoadConfig_DefaultBaseBranch(t *testing.T) {
+	tempDir := t.TempDir()
+	yamlContent := `version: "1"
+review:
+  default_base_branch: "staging"
+`
+	configPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("failed to write test yaml: %v", err)
+	}
+
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Review.DefaultBaseBranch != "staging" {
+		t.Errorf("expected default_base_branch 'staging', got %q", cfg.Review.DefaultBaseBranch)
+	}
+}

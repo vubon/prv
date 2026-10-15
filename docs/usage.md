@@ -65,14 +65,21 @@ prv bundle --staged | pbcopy
 Extract unified diffs and PR metadata for the current or specified local branch:
 
 ```bash
-# Current or target branch against default base branch (main/master)
-prv bundle --branch feat/user-auth
+# Review current branch against custom base branch (e.g. staging or dev)
+prv bundle --base staging
+prv bundle -B dev
 
 # Target branch against a custom base branch
 prv bundle --branch feat/user-auth --base develop
+# or using positional arguments:
+prv bundle feat/user-auth staging
+
+# Current or target branch against default base branch (main/master or .prv.yaml)
+prv bundle --branch feat/user-auth
+prv bundle
 
 # Output review bundle as JSON
-prv bundle --branch feat/user-auth --json
+prv bundle --base staging --json
 ```
 
 ### 2. Zero-Clone Remote PR Review
@@ -273,7 +280,7 @@ prv bundle -b feat/user-auth -c .prv.prod.yaml
 | :--- | :--- | :--- | :--- | :--- |
 | `--staged` | `-s` | bool | `false` | Bundle git staged changes (`--cached`) for local pre-commit review |
 | `--branch` | `-b` | string | `""` | Target feature branch to review |
-| `--base` | | string | `"main"` | Base branch to compare against |
+| `--base` | `-B` | string | `"main"` | Base branch to compare against (defaults to main/master or .prv.yaml) |
 | `--pr` | | string | `""` | GitHub PR number or URL (zero-clone) |
 | `--repo` | `-r` | string | `"."` | Path to local Git repository |
 | `--config` | `-c` | string | `""` | Path to custom `.prv.yaml` configuration file |
@@ -286,7 +293,7 @@ prv bundle -b feat/user-auth -c .prv.prod.yaml
 | :--- | :--- | :--- | :--- | :--- |
 | `--staged` | `-s` | bool | `false` | Generate diagram for git staged changes (`--cached`) |
 | `--branch` | `-b` | string | `""` | Target feature branch (defaults to current branch) |
-| `--base` | | string | `"main"` | Base branch to compare against |
+| `--base` | `-B` | string | `"main"` | Base branch to compare against (defaults to main/master or .prv.yaml) |
 | `--pr` | | string | `""` | GitHub PR number or URL (zero-clone) |
 | `--repo` | `-r` | string | `"."` | Path to local Git repository |
 | `--markdown`| `-m` | bool | `false` | Wrap diagram inside ```` ```mermaid ```` code fence |

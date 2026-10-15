@@ -216,3 +216,160 @@ func TestGitRunner_GetStagedDiff(t *testing.T) {
 		t.Errorf("expected 3 additions, got %d", staged[0].Additions)
 	}
 }
+
+func mustRunGit(t *testing.T, runner *GitRunner, args ...string) string {
+	t.Helper()
+	out, err := runner.runCmd(args...)
+	if err != nil {
+		t.Fatalf("git command %v failed: %v, out: %s", args, err, out)
+	}
+	return out
+}
+
+func TestGitRunner_GetDiff_CustomBaseBranch(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		// Fallback for older git versions
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	// Commit on main
+	fileA := filepath.Join(tempDir, "base.txt")
+	if err := os.WriteFile(fileA, []byte("initial\n"), 0644); err != nil {
+		t.Fatalf("failed to write fileA: %v", err)
+	}
+	mustRunGit(t, runner, "add", "base.txt")
+	mustRunGit(t, runner, "commit", "-m", "init main")
+
+	// Create staging branch
+	mustRunGit(t, runner, "checkout", "-b", "staging")
+
+	// Create feature branch from staging
+	mustRunGit(t, runner, "checkout", "-b", "feat/payment")
+
+	// Make changes on feat/payment
+	fileB := filepath.Join(tempDir, "payment.go")
+	if err := os.WriteFile(fileB, []byte("package payment\n\nfunc Pay() bool { return true }\n"), 0644); err != nil {
+		t.Fatalf("failed to write fileB: %v", err)
+	}
+	mustRunGit(t, runner, "add", "payment.go")
+	mustRunGit(t, runner, "commit", "-m", "feat: add payment")
+
+	// Test GetDiff against staging
+	changes, err := runner.GetDiff("staging", "feat/payment", false)
+	if err != nil {
+		t.Fatalf("GetDiff(staging, feat/payment) failed: %v", err)
+	}
+
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 file change, got %d", len(changes))
+	}
+	if changes[0].Path != "payment.go" {
+		t.Errorf("expected changed path 'payment.go', got %s", changes[0].Path)
+	}
+	if changes[0].Additions != 3 {
+		t.Errorf("expected 3 additions, got %d", changes[0].Additions)
+	}
+
+	// Test empty baseBranch falls back to default base branch
+	changesFallback, err := runner.GetDiff("", "feat/payment", false)
+	if err != nil {
+		t.Fatalf("GetDiff('', feat/payment) failed: %v", err)
+	}
+	if len(changesFallback) != 1 {
+		t.Fatalf("expected 1 file change with default base fallback, got %d", len(changesFallback))
+	}
+
+	// Test error when base branch does not exist
+	_, err = runner.GetDiff("non-existent-branch", "feat/payment", false)
+	if err == nil {
+		t.Error("expected error when base branch does not exist, got nil")
+	}
+}
+
+func TestGitRunner_GetDefaultBaseBranch(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "develop"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "develop")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	if err := os.WriteFile(filepath.Join(tempDir, "readme.txt"), []byte("hello\n"), 0644); err != nil {
+		t.Fatalf("failed to write readme: %v", err)
+	}
+	mustRunGit(t, runner, "add", "readme.txt")
+	mustRunGit(t, runner, "commit", "-m", "init develop")
+
+	detected := runner.GetDefaultBaseBranch()
+	if detected != "develop" {
+		t.Errorf("expected detected base branch 'develop', got %q", detected)
+	}
+}
+
+func TestValidateRefName(t *testing.T) {
+	validRefs := []string{
+		"main",
+		"master",
+		"develop",
+		"staging",
+		"feat/payment-gateway",
+		"v1.0.0",
+		"release-2026.10",
+		"user@work/feat",
+	}
+	for _, ref := range validRefs {
+		if err := ValidateRefName(ref); err != nil {
+			t.Errorf("expected ref %q to be valid, got error: %v", ref, err)
+		}
+	}
+
+	invalidRefs := []struct {
+		ref  string
+		desc string
+	}{
+		{"", "empty ref"},
+		{"-b", "starts with dash"},
+		{"--output=/tmp/evil", "starts with double dash"},
+		{"feat branch", "contains whitespace"},
+		{"feat\tbranch", "contains tab"},
+		{"feat\nbranch", "contains newline"},
+		{"feat..main", "contains .."},
+		{"feat~1", "contains ~"},
+		{"feat^2", "contains ^"},
+		{"feat:foo", "contains :"},
+		{"feat?foo", "contains ?"},
+		{"feat*foo", "contains *"},
+		{"feat[0]", "contains ["},
+		{"feat\\foo", "contains backslash"},
+	}
+	for _, tc := range invalidRefs {
+		if err := ValidateRefName(tc.ref); err == nil {
+			t.Errorf("expected ref %q (%s) to be rejected, got nil", tc.ref, tc.desc)
+		}
+	}
+}
+
+func TestGitRunner_GetDiff_RefValidation(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	// Validate that options starting with dash or containing illegal chars are rejected
+	if _, err := runner.GetDiff("-b", "main", false); err == nil {
+		t.Error("expected error for baseRef starting with '-', got nil")
+	}
+	if _, err := runner.GetDiff("main", "--output=/tmp/evil", false); err == nil {
+		t.Error("expected error for headRef starting with '-', got nil")
+	}
+	if _, err := runner.GetDiff("feat..staging", "main", false); err == nil {
+		t.Error("expected error for baseRef containing '..', got nil")
+	}
+}

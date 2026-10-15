@@ -34,7 +34,10 @@ Before analyzing raw diffs or re-evaluating existing PRs:
 ## 🟢 MANDATORY PR BUNDLE WORKFLOW
 When requested to review a branch or Pull Request:
 1. Generate the review bundle via prv:
-   - For local branch: `./bin/prv bundle --branch <branch_name>`
+   - For current branch against custom base branch: `./bin/prv bundle --base <base_branch>` (e.g., `staging`, `dev`, `develop`)
+   - For local branch against custom base: `./bin/prv bundle --branch <branch_name> --base <base_branch>`
+   - For local branch against default base: `./bin/prv bundle --branch <branch_name>`
+   - For staged uncommitted changes: `./bin/prv bundle --staged`
    - For remote GitHub PR: `./bin/prv bundle --pr <pr_url_or_number>`
    - For custom rules: `./bin/prv bundle --config .prv.yaml`
 2. Evaluate the bundle against the 9-Dimension Engineering Evaluation Matrix.
@@ -90,7 +93,9 @@ Once configured, invoke Antigravity with natural prompts:
 ```
 "Review my staged changes before I commit"
 "Run a pre-commit review with prv"
-"Review branch feat/payment-gateway"
+"Review current branch against staging"
+"Review current branch against dev"
+"Review branch feat/payment-gateway against staging"
 "Review PR #42 with prv"
 "Check our sensitive paths in PR https://github.com/org/repo/pull/10"
 "Post the review comment to PR #42"

@@ -14,7 +14,9 @@ Add the following section to your repository's `CLAUDE.md`:
 # Pull Request & Code Review Workflow (prv)
 
 ## Tool Commands
+- Bundle current branch against base: `prv bundle --base <base_branch>` (e.g. `staging`, `dev`)
 - Bundle staged changes (pre-commit): `prv bundle --staged`
+- Bundle branch against custom base: `prv bundle --branch <name> --base <base_branch>`
 - Bundle local branch review: `prv bundle --branch <branch_name>`
 - Bundle remote GitHub PR: `prv bundle --pr <pr_number_or_url>`
 - Format review into markdown report: `prv report --file <review_json> --dir reviews/`

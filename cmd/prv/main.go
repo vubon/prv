@@ -33,18 +33,19 @@ Commands:
   version     Show prv CLI version
 
 Examples:
-  prv walkthrough
-  prv walkthrough --staged
-  prv walkthrough -b feat/payment
-  prv diagram
-  prv diagram --staged
-  prv diagram -b feat/payment
-  prv bundle --staged
-  prv bundle --staged -o staged.md
-  prv bundle --branch feat/payment --json
+  prv bundle --base staging            # Review current branch against staging
+  prv bundle -B dev                    # Review current branch against dev
+  prv bundle feat/payment staging      # Compare feature branch against staging
   prv bundle --branch feat/auth --base main
+  prv bundle --staged                  # Review uncommitted staged changes
+  prv bundle --staged -o staged.md
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
-  prv bundle --config custom-rules.yaml -o bundle.md
+  prv diagram --base staging           # Generate architecture diagram against staging
+  prv diagram -B dev
+  prv diagram --staged
+  prv walkthrough --base staging       # Generate file walkthrough against staging
+  prv walkthrough -B dev
+  prv walkthrough --staged
   prv report --file review.json --pr 42 --post
   prv report --file review.json --pr 42 --post --inline
   prv report --file review.json --copy
@@ -83,6 +84,85 @@ func main() {
 	}
 }
 
+// parseFlagsAndPositionals parses flags from args while allowing flags to appear
+// anywhere (before, between, or after positional arguments), overcoming Go's default
+// flag.Parse behavior which stops parsing at the first positional argument.
+func parseFlagsAndPositionals(fs *flag.FlagSet, args []string) []string {
+	_ = fs.Parse(args)
+	var positionals []string
+	for rest := fs.Args(); len(rest) > 0; rest = fs.Args() {
+		positionals = append(positionals, rest[0])
+		_ = fs.Parse(rest[1:])
+	}
+	return positionals
+}
+
+// resolvePositionalArgs maps positional arguments to branch, base, or prID when flags are omitted.
+func resolvePositionalArgs(posArgs []string, branch, base, prID *string) {
+	if len(posArgs) == 0 {
+		return
+	}
+
+	if len(posArgs) >= 2 {
+		if *branch == "" {
+			*branch = posArgs[0]
+		}
+		if *base == "" {
+			*base = posArgs[1]
+		}
+		return
+	}
+
+	arg := strings.TrimSpace(posArgs[0])
+	if arg == "" {
+		return
+	}
+
+	// 1. Check if argument is a GitHub PR URL or PR number
+	if *prID == "" && (strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") || isAllDigits(arg)) {
+		*prID = arg
+		return
+	}
+
+	// 2. If --base was explicitly specified, the positional argument is the feature branch
+	if *base != "" && *branch == "" {
+		*branch = arg
+		return
+	}
+
+	// 3. If --branch was explicitly specified, the positional argument is the base branch
+	if *branch != "" && *base == "" {
+		*base = arg
+		return
+	}
+
+	// 4. If neither was specified:
+	// If the argument matches a standard integration base branch, treat it as the target base branch
+	// so users can comfortably run: `prv bundle staging` or `prv bundle dev` from their current branch.
+	commonBaseBranches := map[string]bool{
+		"main": true, "master": true, "staging": true, "dev": true, "develop": true, "next": true, "trunk": true,
+	}
+	if commonBaseBranches[strings.ToLower(arg)] {
+		*base = arg
+		return
+	}
+
+	// Otherwise, default single positional argument to feature branch
+	*branch = arg
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	var branch, base, prID, repoPath, outputFile, configPath string
@@ -94,7 +174,8 @@ func runBundle(args []string) {
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
 
-	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master)")
+	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master or .prv.yaml)")
+	fs.StringVar(&base, "B", "", "Alias for --base")
 
 	fs.StringVar(&prID, "pr", "", "PR number or full GitHub PR URL")
 
@@ -112,7 +193,8 @@ func runBundle(args []string) {
 	fs.StringVar(&outputFile, "out", "", "Alias for --output")
 	fs.StringVar(&outputFile, "o", "", "Alias for --output")
 
-	_ = fs.Parse(args)
+	positionals := parseFlagsAndPositionals(fs, args)
+	resolvePositionalArgs(positionals, &branch, &base, &prID)
 
 	if staged && prID != "" {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
@@ -309,7 +391,8 @@ func runDiagram(args []string) {
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
 
-	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master)")
+	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master or .prv.yaml)")
+	fs.StringVar(&base, "B", "", "Alias for --base")
 
 	fs.StringVar(&prID, "pr", "", "PR number or full GitHub PR URL")
 
@@ -323,7 +406,8 @@ func runDiagram(args []string) {
 	fs.BoolVar(&markdownFence, "markdown", false, "Wrap diagram inside ```mermaid markdown code fence")
 	fs.BoolVar(&markdownFence, "m", false, "Alias for --markdown")
 
-	_ = fs.Parse(args)
+	positionals := parseFlagsAndPositionals(fs, args)
+	resolvePositionalArgs(positionals, &branch, &base, &prID)
 
 	if staged && prID != "" {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
@@ -385,7 +469,8 @@ func runWalkthrough(args []string) {
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
 
-	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master)")
+	fs.StringVar(&base, "base", "", "Base target branch (defaults to main/master or .prv.yaml)")
+	fs.StringVar(&base, "B", "", "Alias for --base")
 
 	fs.StringVar(&prID, "pr", "", "PR number or full GitHub PR URL")
 
@@ -398,7 +483,8 @@ func runWalkthrough(args []string) {
 
 	fs.BoolVar(&formatJSON, "json", false, "Output walkthrough as raw JSON")
 
-	_ = fs.Parse(args)
+	positionals := parseFlagsAndPositionals(fs, args)
+	resolvePositionalArgs(positionals, &branch, &base, &prID)
 
 	if staged && prID != "" {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")

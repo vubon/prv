@@ -3,6 +3,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.9.0-alpha] — 2026-10-15
+
+### Added
+- **Flexible Base Branch Comparison (`--base`, `-B`)**:
+  - Review the current branch against any integration branch (e.g., `staging`, `dev`, `develop`) without needing to explicitly supply `--branch`:
+    `prv bundle --base staging` or `prv bundle -B dev`.
+  - Added support for `--base, -B` across `prv diagram` and `prv walkthrough`.
+- **Positional Branch & PR Argument Resolution**:
+  - Compare current branch against base with positional shorthand: `prv bundle staging` or `prv bundle dev`.
+  - Compare explicit feature branch against base with two positional arguments: `prv bundle feat/auth staging`.
+  - Automatically identifies common base branches (`staging`, `dev`, `develop`, `main`, `master`, `next`, `trunk`).
+- **Configurable `default_base_branch` in `.prv.yaml`**:
+  - Repositories using non-main trunk or GitFlow branches can configure `review.default_base_branch: "staging"`.
+  - Defaults to repo config before falling back to automatic git detection.
+- **Enhanced Git Ref Resolution & Local Commit Preservation (`internal/git/git.go`)**:
+  - Prioritizes local branch commits on `headRef` rather than prematurely overriding with `origin/<head>`, preserving unpushed local commits.
+  - Automatically attempts `git fetch origin <base>` when remote base branches haven't been fetched locally.
+  - Expanded `GetDefaultBaseBranch()` fallback order across `main`, `master`, `develop`, `dev`, and `staging`.
+
+---
+
 ## [0.8.0-alpha] — 2026-10-12
 
 ### Added

@@ -19,6 +19,7 @@ Add the following section to your repository's `CLAUDE.md`:
 - Bundle branch against custom base: `prv bundle --branch <name> --base <base_branch>`
 - Bundle local branch review: `prv bundle --branch <branch_name>`
 - Bundle remote GitHub PR: `prv bundle --pr <pr_number_or_url>`
+- Generate architecture diagram: `prv diagram --markdown`
 - Format review into markdown report: `prv report --file <review_json> --dir reviews/`
 - Publish review directly to GitHub PR: `prv report --file <review_json> --pr <id> --post`
 - Review starter config: `prv init`
@@ -40,6 +41,7 @@ When requested to review code, staged changes, a branch, or a GitHub PR:
 4. Mandatory Sections in Review Report:
    - **🎯 Weakest Link in the Change**
    - **⚖️ Architectural Trade-offs**
+   - **🗺️ Architecture & Component Impact Diagram** (Mermaid graph via `prv diagram --markdown` or bundle context)
 5. Line-Level Feedback Format:
    Use Conventional Comments (`🚨 blocking`, `⚠️ issue`, `🔒 security`, `⚡ performance`, `💡 suggestion`, `🔍 nit`) with exact line anchors (`file.go#L42`) and copy-ready ` ```suggestion ` blocks.
 6. Save the final report to `reviews/<YYYY-MM-DD>-<branch>.md`.

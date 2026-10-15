@@ -44,6 +44,7 @@ When requested to review a branch or Pull Request:
 3. Every review report MUST explicitly highlight:
    - **🎯 The Weakest Link in the Change** (how the change will fail under stress)
    - **⚖️ Architectural Trade-offs** (what compromises were made)
+   - **🗺️ Architecture & Component Impact Diagram** (Mermaid graph generated via `prv diagram --markdown` or bundle context)
 4. Format line-level findings using Conventional Comments (`🚨 blocking`, `⚠️ issue`, `🔒 security`, `⚡ performance`, `💡 suggestion`, `🔍 nit`) with exact file paths (`path/file.go#L42`) and copy-ready ` ```suggestion ` blocks.
 5. Save the report to `reviews/<YYYY-MM-DD>-<branch>.md`.
 
@@ -79,7 +80,7 @@ description: Autonomous Pull Request reviewer using the prv Go context engine an
 When the user asks to review code:
 1. Run `prv bundle --staged` (for pre-commit self-review), `prv bundle --branch <name>`, or `prv bundle --pr <number>`.
 2. Review unified diffs with active team standards from `.prv.yaml`.
-3. Format output per the 9 dimensions and Conventional Comments.
+3. Generate Mermaid architecture diagram (`prv diagram --markdown`) and format output per the 9 dimensions and Conventional Comments.
 4. Save report in `reviews/<YYYY-MM-DD>-<branch>.md` and persist summary to KacheDB.
 5. **Publishing Safeguard (Human-in-the-Loop):** Present findings in chat first. Do NOT run `prv report --post` or `gh pr comment` until the user explicitly requests to publish.
 ```

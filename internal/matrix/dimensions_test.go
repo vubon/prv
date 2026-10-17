@@ -6,8 +6,8 @@ import (
 )
 
 func TestReviewDimensionsCount(t *testing.T) {
-	if len(ReviewDimensions) != 9 {
-		t.Fatalf("expected 9 review dimensions, got %d", len(ReviewDimensions))
+	if len(ReviewDimensions) != 11 {
+		t.Fatalf("expected 11 review dimensions, got %d", len(ReviewDimensions))
 	}
 
 	names := make(map[string]bool)
@@ -34,6 +34,8 @@ func TestReviewDimensionsCount(t *testing.T) {
 		"7. Architecture & System Coupling",
 		"8. Observability & Operability",
 		"9. Blast Radius & Failure Modes (The Weakest Link)",
+		"10. Data Contract & Migration Safety",
+		"11. Environment & Configuration Hygiene",
 	}
 
 	for _, expected := range expectedDimensions {
@@ -54,11 +56,11 @@ func TestGenerateMatrixMarkdown(t *testing.T) {
 		t.Error("markdown output missing dimension 9")
 	}
 
-	if !strings.Contains(md, "7. Architecture & System Coupling") {
-		t.Error("markdown output missing dimension 7")
+	if !strings.Contains(md, "10. Data Contract & Migration Safety") {
+		t.Error("markdown output missing dimension 10")
 	}
 
-	if !strings.Contains(md, "8. Observability & Operability") {
-		t.Error("markdown output missing dimension 8")
+	if !strings.Contains(md, "11. Environment & Configuration Hygiene") {
+		t.Error("markdown output missing dimension 11")
 	}
 }

@@ -19,7 +19,7 @@ prv bundle --branch feat/auth | llm -m claude-3-7-sonnet \
 
 # Review remote GitHub PR with GPT-4o
 prv bundle --pr 42 | llm -m gpt-4o \
-  -s "Review this PR against the 9-dimension checklist and provide Conventional Comments."
+  -s "Review this PR against the 11-dimension checklist and provide Conventional Comments."
 ```
 
 ### Using `aichat`

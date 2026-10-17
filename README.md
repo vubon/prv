@@ -331,6 +331,7 @@ review_matrix:
 | | `--post, -p` | Publish review report to GitHub PR. |
 | | `--inline, -i` | Include line-level inline diff comments. |
 | | `--copy, -c` | Copy comments to clipboard. |
+| `prv matrix` | | Print the 11-Dimension Engineering PR Review Matrix. |
 | `prv init` | `--force` | Generate `.prv.yaml` configuration file. |
 | `prv version` | | Print current version and release target. |
 

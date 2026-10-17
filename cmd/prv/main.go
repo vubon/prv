@@ -28,7 +28,7 @@ Commands:
   diagram     Generate Mermaid architecture and package dependency graph
   walkthrough Generate collapsible file-by-file changes walkthrough
   report      Format a review JSON result into markdown and copyable comments
-  matrix      Print the 9-Dimension Engineering PR Review Matrix
+  matrix      Print the 11-Dimension Engineering PR Review Matrix
   init        Generate a starter .prv.yaml configuration file in repository
   version     Show prv CLI version
 

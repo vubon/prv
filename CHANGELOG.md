@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.10.0-alpha] — 2026-10-17
+
 ### Added
 - **11-Dimension Engineering PR Review Matrix**:
   - Expanded review matrix from 9 to 11 dimensions with two new production pillars:

@@ -40,7 +40,7 @@ When requested to review a branch or Pull Request:
    - For staged uncommitted changes: `./bin/prv bundle --staged`
    - For remote GitHub PR: `./bin/prv bundle --pr <pr_url_or_number>`
    - For custom rules: `./bin/prv bundle --config .prv.yaml`
-2. Evaluate the bundle against the 9-Dimension Engineering Evaluation Matrix.
+2. Evaluate the bundle against the 11-Dimension Engineering Evaluation Matrix.
 3. Every review report MUST explicitly highlight:
    - **🎯 The Weakest Link in the Change** (how the change will fail under stress)
    - **⚖️ Architectural Trade-offs** (what compromises were made)
@@ -71,7 +71,7 @@ Create `.agents/skills/prv/SKILL.md` to register `prv` as an on-demand skill:
 ```markdown
 ---
 name: prv
-description: Autonomous Pull Request reviewer using the prv Go context engine and 9-dimension engineering matrix
+description: Autonomous Pull Request reviewer using the prv Go context engine and 11-dimension engineering matrix
 ---
 
 # PR Review Context Engine (prv)
@@ -80,7 +80,7 @@ description: Autonomous Pull Request reviewer using the prv Go context engine an
 When the user asks to review code:
 1. Run `prv bundle --staged` (for pre-commit self-review), `prv bundle --branch <name>`, or `prv bundle --pr <number>`.
 2. Review unified diffs with active team standards from `.prv.yaml`.
-3. Generate Mermaid architecture diagram (`prv diagram --markdown`) and format output per the 9 dimensions and Conventional Comments.
+3. Generate Mermaid architecture diagram (`prv diagram --markdown`) and format output per the 11 dimensions and Conventional Comments.
 4. Save report in `reviews/<YYYY-MM-DD>-<branch>.md` and persist summary to KacheDB.
 5. **Publishing Safeguard (Human-in-the-Loop):** Present findings in chat first. Do NOT run `prv report --post` or `gh pr comment` until the user explicitly requests to publish.
 ```

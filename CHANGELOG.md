@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+- **11-Dimension Engineering PR Review Matrix**:
+  - Expanded review matrix from 9 to 11 dimensions with two new production pillars:
+    - **Dimension 10: Data Contract & Migration Safety** (`BLOCKING`): Safeguards against backward-incompatible DB migrations, non-concurrent table locking on large tables, API/JSON serialization drift, and cache payload incompatibilities during rolling deployments.
+    - **Dimension 11: Environment & Configuration Hygiene** (`MAJOR`): Ensures environment variables are documented with safe fallback boot defaults, config validations, and safe feature flag lifecycle management.
+  - Updated CLI command `prv matrix` to output all 11 dimensions with interactive checklist items.
+  - Updated agent guides and templates across Claude, Cursor, Antigravity, and CLI.
+
 ## [0.9.0-alpha] — 2026-10-15
 
 ### Added

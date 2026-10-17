@@ -8,7 +8,7 @@ type Dimension struct {
 	Checklist   []string `json:"checklist"`
 }
 
-// ReviewDimensions contains the standard 6 review pillars.
+// ReviewDimensions contains the standard 11 review pillars.
 var ReviewDimensions = []Dimension{
 	{
 		Name:        "1. Intent & Spec Alignment",
@@ -104,6 +104,28 @@ var ReviewDimensions = []Dimension{
 			"What happens if external dependencies (network, API, disk, CLI) are down, slow, or returning invalid payloads?",
 			"What is the blast radius of a failure (isolated component vs cascading system-wide outage)?",
 			"Is the change safely roll-backable without database/schema corruption or client state incompatibility?",
+		},
+	},
+	{
+		Name:        "10. Data Contract & Migration Safety",
+		Description: "Prevent schema migration lockups, breaking API serialization drift, and rolling deployment incompatibilities.",
+		Severity:    "BLOCKING",
+		Checklist: []string{
+			"Are database migrations backward-compatible with the previous code version (expand-and-contract pattern)?",
+			"Do database migrations avoid long exclusive table locks on large tables (e.g. non-concurrent index creation or table rewrites)?",
+			"Are API/gRPC/JSON data contracts backward-compatible with existing clients (no deleted or renamed fields without versioning)?",
+			"Are shared cached structures (Redis, memcached) resilient if old and new application instances run simultaneously during rollout?",
+		},
+	},
+	{
+		Name:        "11. Environment & Configuration Hygiene",
+		Description: "Ensure environment variable completeness, safe boot defaults, documentation sync, and feature flag safety.",
+		Severity:    "MAJOR",
+		Checklist: []string{
+			"Are new required environment variables documented in .env.example, deployment manifests, or configuration templates?",
+			"Are safe fallback defaults provided so omitting an optional configuration does not cause runtime panics on boot?",
+			"Are feature flags wired with safe fallback behavior and clear deprecation or cleanup plans?",
+			"Has user-facing behavior, CLI flags, or public interfaces changed without corresponding documentation updates (README, docs)?",
 		},
 	},
 }

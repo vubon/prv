@@ -28,7 +28,7 @@ Add the following section to your repository's `CLAUDE.md`:
 When requested to review code, staged changes, a branch, or a GitHub PR:
 1. Always run `prv bundle` first to extract unified diffs, noise-filtered context, and team standards from `.prv.yaml`.
 2. Inspect any paths marked `🚨 [SENSITIVE]` for authentication, authorization, or schema migration risks.
-3. Evaluate the diffs as a Staff Engineer against the 9 review dimensions:
+3. Evaluate the diffs as a Staff Engineer against the 11 review dimensions:
    - Intent & Spec Alignment
    - Logic & Bug Detection
    - Security & Data Safety
@@ -38,6 +38,8 @@ When requested to review code, staged changes, a branch, or a GitHub PR:
    - Architecture & System Coupling
    - Observability & Operability
    - Blast Radius & Failure Modes
+   - Data Contract & Migration Safety
+   - Environment & Configuration Hygiene
 4. Mandatory Sections in Review Report:
    - **🎯 Weakest Link in the Change**
    - **⚖️ Architectural Trade-offs**
@@ -88,9 +90,9 @@ prv bundle --pr 42 -o pr-42-review.md
 ```
 
 Drag and drop `staged-review.md` or `review-context.md` into Claude Desktop and prompt:
-> "Review this PR context against the 9-dimension engineering matrix. Identify the weakest link, architectural trade-offs, and provide Conventional Comments."
+> "Review this PR context against the 11-dimension engineering matrix. Identify the weakest link, architectural trade-offs, and provide Conventional Comments."
 
 ### Option B: Via Local Shell Execution Tool
 If Claude Desktop is configured with a local command execution tool:
-> "Run `prv bundle --staged` in the repository and evaluate the output against the 9 engineering dimensions."
+> "Run `prv bundle --staged` in the repository and evaluate the output against the 11 engineering dimensions."
 

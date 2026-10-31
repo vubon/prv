@@ -15,14 +15,16 @@ Add the following section to your repository's `CLAUDE.md`:
 
 ## Tool Commands
 - Bundle current branch against base: `prv bundle --base <base_branch>` (e.g. `staging`, `dev`)
-- Bundle staged changes (pre-commit): `prv bundle --staged`
+- Bundle with reviewer context / SPDD spec: `prv bundle --pr <id> --context-file <spec.md>` (alias `-c`)
+- Bundle staged changes (pre-commit): `prv bundle --staged` or `prv bundle --staged -c <spec.md>`
+- Auto-discovery context: files in `.prv/context/` (`<id>.md`, `pr-<id>.md`, `<branch>.md`)
 - Bundle branch against custom base: `prv bundle --branch <name> --base <base_branch>`
 - Bundle local branch review: `prv bundle --branch <branch_name>`
 - Bundle remote GitHub PR: `prv bundle --pr <pr_number_or_url>`
 - Generate architecture diagram: `prv diagram --markdown`
 - Format review into markdown report: `prv report --file <review_json> --dir reviews/`
 - Publish review directly to GitHub PR: `prv report --file <review_json> --pr <id> --post`
-- Review starter config: `prv init`
+- Review starter config & scaffold context dir: `prv init` (or `prv init --context-dir <dir>`)
 
 ## Review Guidelines
 When requested to review code, staged changes, a branch, or a GitHub PR:

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,7 +30,7 @@ Commands:
   walkthrough Generate collapsible file-by-file changes walkthrough
   report      Format a review JSON result into markdown and copyable comments
   matrix      Print the 11-Dimension Engineering PR Review Matrix
-  init        Generate a starter .prv.yaml configuration file in repository
+  init        Generate a starter .prv.yaml and scaffold context directory with template.md
   version     Show prv CLI version
 
 Examples:
@@ -39,6 +40,8 @@ Examples:
   prv bundle --branch feat/auth --base main
   prv bundle --staged                  # Review uncommitted staged changes
   prv bundle --staged -o staged.md
+  prv bundle --staged -c spec.md       # Review staged changes with design spec
+  prv bundle --pr 42 -c 42.md          # Review PR #42 with reviewer context
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
   prv diagram --base staging           # Generate architecture diagram against staging
   prv diagram -B dev
@@ -49,7 +52,8 @@ Examples:
   prv report --file review.json --pr 42 --post
   prv report --file review.json --pr 42 --post --inline
   prv report --file review.json --copy
-  prv init
+  prv init                             # Scaffold .prv.yaml and .prv/context/
+  prv init --context-dir specs/reviews # Scaffold with custom context directory
   prv matrix
 `)
 }
@@ -163,10 +167,22 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ", ")
+}
+
+func (s *stringSliceFlag) Set(val string) error {
+	*s = append(*s, val)
+	return nil
+}
+
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	var branch, base, prID, repoPath, outputFile, configPath string
 	var formatJSON, includeLocks, staged bool
+	var contextFiles stringSliceFlag
 
 	fs.BoolVar(&staged, "staged", false, "Bundle git staged changes (--cached) for local pre-commit review")
 	fs.BoolVar(&staged, "s", false, "Alias for --staged")
@@ -183,7 +199,9 @@ func runBundle(args []string) {
 	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
 
 	fs.StringVar(&configPath, "config", "", "Custom path to .prv.yaml configuration file")
-	fs.StringVar(&configPath, "c", "", "Alias for --config")
+
+	fs.Var(&contextFiles, "context-file", "Path to markdown context/spec file (repeatable)")
+	fs.Var(&contextFiles, "c", "Alias for --context-file")
 
 	fs.BoolVar(&formatJSON, "json", false, "Output bundle as raw JSON to stdout")
 
@@ -211,6 +229,7 @@ func runBundle(args []string) {
 		Staged:       staged,
 		FormatJSON:   formatJSON,
 		IncludeLocks: includeLocks,
+		ContextFiles: contextFiles,
 	}
 
 	bundleCtx, err := bundler.PrepareBundle(opts)
@@ -369,15 +388,30 @@ func runMatrix() {
 }
 
 func runInit(args []string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	var repoPath, contextDir string
+
+	fs.StringVar(&repoPath, "repo", ".", "Path to target repository")
+	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
+	fs.StringVar(&contextDir, "context-dir", ".prv/context", "Designated directory for reviewer context files")
+
+	posArgs := parseFlagsAndPositionals(fs, args)
+
 	dest := ".prv.yaml"
-	if len(args) > 0 {
-		dest = args[0]
+	if len(posArgs) > 0 {
+		dest = posArgs[0]
 	}
-	if err := config.WriteDefaultConfig(dest); err != nil {
+
+	targetConfig := dest
+	if !filepath.IsAbs(targetConfig) && repoPath != "." && repoPath != "" {
+		targetConfig = filepath.Join(repoPath, dest)
+	}
+
+	if err := config.WriteDefaultConfigWithContextDir(targetConfig, contextDir); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating configuration file: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Created starter configuration file: %s\n", dest)
+	fmt.Printf("Created starter configuration file: %s\n", targetConfig)
 }
 
 func runDiagram(args []string) {

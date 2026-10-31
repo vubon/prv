@@ -11,8 +11,15 @@ import (
 
 // Config represents the top-level .prv.yaml configuration schema.
 type Config struct {
-	Version string       `yaml:"version"`
-	Review  ReviewConfig `yaml:"review"`
+	Version string        `yaml:"version"`
+	Context ContextConfig `yaml:"context"`
+	Review  ReviewConfig  `yaml:"review"`
+}
+
+// ContextConfig holds reviewer-provided context directory and safety limits.
+type ContextConfig struct {
+	Dir       string `yaml:"dir"`         // Designated context directory (default: .prv/context)
+	MaxSizeKB int    `yaml:"max_size_kb"` // Maximum allowed size per context file in KB (default: 256; 0 disables limit)
 }
 
 // ReviewConfig contains rules, sensitive paths, persona, and strictness.
@@ -34,6 +41,10 @@ type StrictnessConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Version: "1",
+		Context: ContextConfig{
+			Dir:       ".prv/context",
+			MaxSizeKB: 256,
+		},
 		Review: ReviewConfig{
 			Persona: "staff-advisory",
 			Strictness: StrictnessConfig{
@@ -94,6 +105,12 @@ func LoadConfig(repoPath string, customConfigPath string) (*Config, error) {
 	// Apply sensible fallbacks if empty
 	if cfg.Review.Persona == "" {
 		cfg.Review.Persona = "staff-advisory"
+	}
+	if cfg.Context.Dir == "" {
+		cfg.Context.Dir = ".prv/context"
+	}
+	if cfg.Context.MaxSizeKB < 0 {
+		cfg.Context.MaxSizeKB = 256
 	}
 
 	return cfg, nil
@@ -188,8 +205,24 @@ func IsSensitivePath(path string, sensitivePaths []string) bool {
 
 // DefaultYAMLContent returns the initial starter .prv.yaml file content.
 func DefaultYAMLContent() string {
-	return `# .prv.yaml — PR Review Configuration & Team Standards
+	return DefaultYAMLContentWithContextDir(".prv/context")
+}
+
+// DefaultYAMLContentWithContextDir returns starter .prv.yaml content with a specified context directory.
+func DefaultYAMLContentWithContextDir(contextDir string) string {
+	if contextDir == "" {
+		contextDir = ".prv/context"
+	}
+	return fmt.Sprintf(`# .prv.yaml — PR Review Configuration & Team Standards
 version: "1"
+
+context:
+  # Designated directory for auto-discovered PR/branch context files (SPDD specs, Reason Canvases)
+  # When reviewing PR #12 or branch 'feat/auth', prv checks this folder for 12.md, pr-12.md, or feat-auth.md
+  dir: %q
+
+  # Maximum allowed size per context file in KB (default: 256; set 0 for unlimited)
+  max_size_kb: 256
 
 review:
   # Review persona: "staff-advisory" (default) | "strict-linter" | "mentor"
@@ -221,7 +254,7 @@ review:
   custom_rules:
     - "All database queries must use parameterized placeholders (no string concatenation)"
     - "External HTTP/RPC calls must carry an explicit context with timeout"
-    - "Exported Go errors must be wrapped with %w"
+    - "Exported Go errors must be wrapped with %%w"
     - "No raw goroutines; manage concurrency through worker pools or errgroup"
 
   # Additional file globs to ignore during diff bundling
@@ -233,13 +266,76 @@ review:
     - "mocks/**"
     - "**/*_mock.go"
     - "docs/swagger/**"
+`, contextDir)
+}
+
+// StarterTemplateContent returns the starter Reason Canvas template for reviewer-provided context.
+func StarterTemplateContent() string {
+	return `# Feature Specification & Reason Canvas: [Feature Name]
+
+## 1. Goal & Architectural Intent
+- **Core Purpose:** What problem does this change solve?
+- **User Impact:** What behavior is expected by the end user or client service?
+
+## 2. Invariants & State Transitions
+- What state invariants must *never* be violated under any failure condition?
+- Key operations:
+  1. Operation A: Pre-conditions -> Post-conditions
+  2. Operation B: Edge cases & boundary behavior
+
+## 3. Explicit Non-Goals & Prohibited Changes
+- Out of scope files or behavior:
+- Deprecations or breaking changes explicitly disallowed:
+
+## 4. Security, Data & Migration Contracts
+- Authorization & validation requirements:
+- Database migration safety (no exclusive table locking, expand-and-contract):
+- Environment variables or secrets required:
+
+## 5. Verification & Acceptance Criteria
+- [ ] Unit tests covering edge cases
+- [ ] Concurrency/race condition safety
+- [ ] Backward-compatible API responses
 `
 }
 
-// WriteDefaultConfig creates a starter .prv.yaml file at the destination path.
+// WriteDefaultConfig creates a starter .prv.yaml file at the destination path and scaffolds default context directory.
 func WriteDefaultConfig(destPath string) error {
+	return WriteDefaultConfigWithContextDir(destPath, ".prv/context")
+}
+
+// WriteDefaultConfigWithContextDir creates a starter .prv.yaml file with custom context dir and scaffolds template.md.
+func WriteDefaultConfigWithContextDir(destPath, contextDir string) error {
 	if _, err := os.Stat(destPath); err == nil {
 		return fmt.Errorf("configuration file already exists at %s", destPath)
 	}
-	return os.WriteFile(destPath, []byte(DefaultYAMLContent()), 0644)
+
+	if contextDir == "" {
+		contextDir = ".prv/context"
+	}
+
+	if filepath.IsAbs(contextDir) || !filepath.IsLocal(filepath.FromSlash(contextDir)) {
+		return fmt.Errorf("context directory %q must be a relative path inside the repository", contextDir)
+	}
+
+	content := DefaultYAMLContentWithContextDir(contextDir)
+	if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
+		return err
+	}
+
+	// Scaffold the context directory and template.md
+	baseDir := filepath.Dir(destPath)
+	targetContextDir := filepath.Join(baseDir, filepath.FromSlash(contextDir))
+	if err := os.MkdirAll(targetContextDir, 0755); err != nil {
+		return fmt.Errorf("created %s but failed to create context directory %s: %w", destPath, targetContextDir, err)
+	}
+
+	templatePath := filepath.Join(targetContextDir, "template.md")
+	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+		if err := os.WriteFile(templatePath, []byte(StarterTemplateContent()), 0644); err != nil {
+			return fmt.Errorf("created %s but failed to create starter template %s: %w", destPath, templatePath, err)
+		}
+	}
+
+	return nil
 }

@@ -5,6 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.11.0-alpha] — 2026-10-31
+
+### Added
+- **Reviewer-Provided Context & SPDD Ingestion (`--context-file`, `-c`)**:
+  - Developers and reviewers can supply external context documents (e.g. SPDD Reason Canvases, technical specs, RFCs, boundary criteria) prior to review.
+  - Repeatable CLI flag: `prv bundle --context-file <path>` (alias `-c`).
+  - Auto-discovery from designated folder (default `.prv/context/`) matching PR or branch conventions (`<ID>.md`, `pr-<ID>.md`, `<branch-slug>.md`, `staged.md`).
+  - Configurable in `.prv.yaml` under `context.dir` and `context.max_size_kb` (default: 256 KB; `0` disables limits).
+  - Safe heading normalization (`NormalizeMarkdownHeadings`) demoting top-level `#` headings down by 2 levels while preserving code blocks.
+  - Markdown bundle rendering with dedicated `## 📝 Reviewer-Provided Context (Design Intent & Spec)` section and prompt injection guards.
+  - JSON serialization: structured `user_context` field with source paths and content for programmatic agent consumption.
+  - `prv init` enhancements: automatically scaffolds `.prv/context/` directory and starter `template.md`, with optional `--context-dir` customization flag.
+  - Agent workflows & skills: updated `.agents/skills/prv/SKILL.md` and `.agents/AGENTS.md` to trigger reviews with context (e.g. `"Review PR #12 with context 12.md"`) and evaluate diffs against explicit specs in Dimension 1 (Intent & Spec Alignment).
+
+### Changed
+- **BREAKING (`prv bundle` CLI alias)**: Short flag `-c` on `prv bundle` now aliases `--context-file` instead of `--config`. Use `--config <path>` to specify a custom `.prv.yaml` path (passing a `.yaml`/`.yml` file to `-c` now returns a descriptive error).
+
 ## [0.10.0-alpha] — 2026-10-17
 
 ### Added

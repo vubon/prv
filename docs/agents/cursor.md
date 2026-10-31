@@ -22,7 +22,9 @@ When asked to review a branch, PR, or diff:
 1. **Generate Context Bundle:**
    Run the terminal command:
    - For current branch against custom base: `prv bundle --base <base_branch>` (e.g., `staging`, `dev`)
-   - For uncommitted staged changes: `prv bundle --staged`
+   - For reviewer context / SPDD Reason Canvas: `prv bundle --pr 12 --context-file 12.md` (or `-c`)
+   - For uncommitted staged changes: `prv bundle --staged` or `prv bundle --staged -c specs/canvas.md`
+   - For auto-discovered context in `.prv/context/`: `prv bundle --pr 12`
    - For local branches against custom base: `prv bundle --branch <branch_name> --base <base_branch>`
    - For local branches against default base: `prv bundle --branch <branch_name>`
    - For remote GitHub PRs: `prv bundle --pr <number_or_url>`

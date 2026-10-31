@@ -28,6 +28,12 @@ type FileChange struct {
 	IsSensitive  bool   `json:"is_sensitive,omitempty"`
 }
 
+// UserContextDoc holds an ingested external reviewer context document (e.g. SPDD canvas, RFC, or spec).
+type UserContextDoc struct {
+	SourcePath string `json:"source_path"`
+	Content    string `json:"content"`
+}
+
 // PRContext is the complete bundle payload produced by prv bundle.
 type PRContext struct {
 	Metadata            PRMetadata        `json:"metadata"`
@@ -40,6 +46,7 @@ type PRContext struct {
 	Persona             string            `json:"persona,omitempty"`
 	ArchitectureDiagram string            `json:"architecture_diagram,omitempty"`
 	BundledAt           time.Time         `json:"bundled_at"`
+	UserContext         []UserContextDoc  `json:"user_context,omitempty"`
 }
 
 // SummaryStats contains aggregated diff metrics.
@@ -63,4 +70,5 @@ type BundleOptions struct {
 	IncludeLocks bool
 	MaxDiffLines int
 	CloneCache   bool
+	ContextFiles []string // Explicit reviewer context file paths (--context-file)
 }

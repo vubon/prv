@@ -20,6 +20,12 @@ func TestDefaultConfig(t *testing.T) {
 	if len(cfg.Review.SensitivePaths) == 0 {
 		t.Error("expected default sensitive paths to be populated")
 	}
+	if cfg.Context.Dir != ".prv/context" {
+		t.Errorf("expected default context dir '.prv/context', got %s", cfg.Context.Dir)
+	}
+	if cfg.Context.MaxSizeKB != 256 {
+		t.Errorf("expected default context max size 256, got %d", cfg.Context.MaxSizeKB)
+	}
 }
 
 func TestLoadConfig_NonExistentFileReturnsDefault(t *testing.T) {
@@ -152,9 +158,52 @@ func TestWriteDefaultConfig(t *testing.T) {
 		t.Fatalf("expected created file at %s, got %v", dest, err)
 	}
 
+	// Verify .prv/context directory and template.md were scaffolded
+	contextDir := filepath.Join(tempDir, ".prv", "context")
+	if info, err := os.Stat(contextDir); err != nil || !info.IsDir() {
+		t.Fatalf("expected context dir at %s, err: %v", contextDir, err)
+	}
+
+	templatePath := filepath.Join(contextDir, "template.md")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("expected template.md at %s, err: %v", templatePath, err)
+	}
+	if len(content) == 0 {
+		t.Error("expected template.md to contain starter content, got empty")
+	}
+
 	// Should error if already exists
 	if err := WriteDefaultConfig(dest); err == nil {
 		t.Error("expected error writing over existing config file")
+	}
+}
+
+func TestWriteDefaultConfig_CustomContextDir(t *testing.T) {
+	tempDir := t.TempDir()
+	dest := filepath.Join(tempDir, ".prv.yaml")
+
+	if err := WriteDefaultConfigWithContextDir(dest, "specs/reviews"); err != nil {
+		t.Fatalf("WriteDefaultConfigWithContextDir failed: %v", err)
+	}
+
+	customDir := filepath.Join(tempDir, "specs", "reviews")
+	if info, err := os.Stat(customDir); err != nil || !info.IsDir() {
+		t.Fatalf("expected custom context dir at %s, err: %v", customDir, err)
+	}
+
+	templatePath := filepath.Join(customDir, "template.md")
+	if _, err := os.Stat(templatePath); err != nil {
+		t.Fatalf("expected template.md in custom dir at %s, err: %v", templatePath, err)
+	}
+
+	// Verify loaded config reflects custom dir
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.Context.Dir != "specs/reviews" {
+		t.Errorf("expected loaded config dir 'specs/reviews', got %q", cfg.Context.Dir)
 	}
 }
 
@@ -176,5 +225,60 @@ review:
 
 	if cfg.Review.DefaultBaseBranch != "staging" {
 		t.Errorf("expected default_base_branch 'staging', got %q", cfg.Review.DefaultBaseBranch)
+	}
+}
+
+func TestLoadConfig_ContextConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	yamlContent := `version: "1"
+context:
+  dir: "specs/reviews"
+  max_size_kb: 512
+`
+	configPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("failed to write test yaml: %v", err)
+	}
+
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Context.Dir != "specs/reviews" {
+		t.Errorf("expected context dir 'specs/reviews', got %q", cfg.Context.Dir)
+	}
+	if cfg.Context.MaxSizeKB != 512 {
+		t.Errorf("expected context max size 512, got %d", cfg.Context.MaxSizeKB)
+	}
+}
+
+func TestLoadConfig_ContextUnlimited(t *testing.T) {
+	tempDir := t.TempDir()
+	yamlContent := `version: "1"
+context:
+  max_size_kb: 0
+`
+	configPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("failed to write test yaml: %v", err)
+	}
+
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Context.MaxSizeKB != 0 {
+		t.Errorf("expected context max size 0 (unlimited), got %d", cfg.Context.MaxSizeKB)
+	}
+}
+
+func TestWriteDefaultConfig_InvalidContextDirRejected(t *testing.T) {
+	tempDir := t.TempDir()
+	dest := filepath.Join(tempDir, ".prv.yaml")
+
+	if err := WriteDefaultConfigWithContextDir(dest, "../outside"); err == nil {
+		t.Error("expected error when contextDir escapes repository root")
 	}
 }

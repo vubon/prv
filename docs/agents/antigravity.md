@@ -37,10 +37,12 @@ When requested to review a branch or Pull Request:
    - For current branch against custom base branch: `./bin/prv bundle --base <base_branch>` (e.g., `staging`, `dev`, `develop`)
    - For local branch against custom base: `./bin/prv bundle --branch <branch_name> --base <base_branch>`
    - For local branch against default base: `./bin/prv bundle --branch <branch_name>`
+   - For reviewer-provided context/SPDD canvas: `./bin/prv bundle --pr 12 --context-file 12.md` or `./bin/prv bundle --staged -c specs/canvas.md`
+   - For auto-discovered context: drop `12.md` or `feat-auth.md` into `.prv/context/`
    - For staged uncommitted changes: `./bin/prv bundle --staged`
    - For remote GitHub PR: `./bin/prv bundle --pr <pr_url_or_number>`
    - For custom rules: `./bin/prv bundle --config .prv.yaml`
-2. Evaluate the bundle against the 11-Dimension Engineering Evaluation Matrix.
+2. Evaluate the bundle against the 11-Dimension Engineering Evaluation Matrix (cross-checking against the Reason Canvas in Dimension 1).
 3. Every review report MUST explicitly highlight:
    - **🎯 The Weakest Link in the Change** (how the change will fail under stress)
    - **⚖️ Architectural Trade-offs** (what compromises were made)
@@ -78,8 +80,8 @@ description: Autonomous Pull Request reviewer using the prv Go context engine an
 
 ## Triggering Reviews
 When the user asks to review code:
-1. Run `prv bundle --staged` (for pre-commit self-review), `prv bundle --branch <name>`, or `prv bundle --pr <number>`.
-2. Review unified diffs with active team standards from `.prv.yaml`.
+1. Run `prv bundle --staged` (for pre-commit self-review), `prv bundle --branch <name>`, `prv bundle --pr <number>`, or with context `prv bundle --pr <number> -c <spec.md>`.
+2. Review unified diffs with active team standards from `.prv.yaml` and validate against external context.
 3. Generate Mermaid architecture diagram (`prv diagram --markdown`) and format output per the 11 dimensions and Conventional Comments.
 4. Save report in `reviews/<YYYY-MM-DD>-<branch>.md` and persist summary to KacheDB.
 5. **Publishing Safeguard (Human-in-the-Loop):** Present findings in chat first. Do NOT run `prv report --post` or `gh pr comment` until the user explicitly requests to publish.
@@ -93,6 +95,8 @@ Once configured, invoke Antigravity with natural prompts:
 
 ```
 "Review my staged changes before I commit"
+"Review staged changes with context specs/canvas.md"
+"Review PR #12 with context 12.md"
 "Run a pre-commit review with prv"
 "Review current branch against staging"
 "Review current branch against dev"
@@ -102,4 +106,5 @@ Once configured, invoke Antigravity with natural prompts:
 "Post the review comment to PR #42"
 "Publish this review to GitHub"
 ```
+
 

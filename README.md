@@ -109,8 +109,12 @@ git add internal/auth/ internal/db/
 # 2. Bundle staged changes with repo rules and sensitive path checks
 prv bundle --staged
 
-# 3. Pipe directly into your clipboard for AI review
-prv bundle --staged --copy
+# 3. Bundle with external design spec or SPDD Reason Canvas
+prv bundle --staged -c specs/reason-canvas.md
+
+# 4. Save directly to file or pipe to clipboard
+prv bundle --staged -o staged.md
+prv bundle --staged | pbcopy
 ```
 
 ---
@@ -123,6 +127,10 @@ Prepare an AI-ready context bundle for a teammate's PR or branch:
 # Review current branch against custom base branch (staging, dev, develop)
 prv bundle --base staging
 prv bundle -B dev
+
+# With external context document (SPDD spec, RFC, ticket canvas)
+prv bundle --pr 12 --context-file 12.md
+prv bundle --branch feat/auth -c specs/auth-v2.md
 
 # Positional syntax: compare feature branch against staging
 prv bundle feat/user-auth staging
@@ -247,42 +255,47 @@ prv report --file review_output.json --copy
 
 ## ⚙️ Configuration (`.prv.yaml`)
 
-Initialize a repository configuration file with:
+Initialize a repository configuration file and scaffold `.prv/context/template.md` with:
 
 ```bash
 prv init
+# or customize the context directory:
+prv init --context-dir specs/reviews
 ```
 
 ### Example `.prv.yaml`
 
 ```yaml
-version: 1
+version: "1"
 
-rules:
-  - "All exported functions must include godoc comments."
-  - "No raw SQL queries without parameterized statements."
-  - "Table-driven unit tests required for all new logic."
+context:
+  dir: ".prv/context"
+  max_size_kb: 256
 
-sensitive_paths:
-  - "internal/auth/**"
-  - "config/secrets.go"
-  - "migrations/**"
+review:
+  persona: "staff-advisory"
+  # default_base_branch: "staging"
 
-ignore_patterns:
-  - "*.pb.go"
-  - "*.generated.go"
-  - "dist/**"
+  strictness:
+    blocking_dimensions:
+      - "logic"
+      - "security"
+      - "blast-radius"
 
-review_matrix:
-  - name: "Intent & Spec Alignment"
-  - name: "Logic & Bug Detection"
-  - name: "Security & Data Safety"
-  - name: "Performance & Scalability"
-  - name: "Testing & Verification"
-  - name: "Clean Code & Style"
-  - name: "Architecture & System Coupling"
-  - name: "Observability & Operability"
-  - name: "Blast Radius & The Weakest Link"
+  sensitive_paths:
+    - "internal/auth/**"
+    - "migrations/**"
+    - "*secret*"
+
+  custom_rules:
+    - "All database queries must use parameterized placeholders (no string concatenation)"
+    - "External HTTP/RPC calls must carry an explicit context with timeout"
+    - "Exported Go errors must be wrapped with %w"
+
+  ignore_patterns:
+    - "dist/**"
+    - "vendor/**"
+    - "**/*_mock.go"
 ```
 
 ---
@@ -318,9 +331,9 @@ review_matrix:
 | `prv bundle` | `--branch, -b` | Target branch to compare against base. |
 | | `--base, -B` | Base branch (default: `main` or `default_base_branch` in `.prv.yaml`). |
 | | `--staged, -s` | Bundle uncommitted staged git changes. |
+| | `--context-file, -c` | Path to markdown context/spec file (repeatable). |
 | | `--pr` | GitHub PR number or full URL. |
 | | `--output, -o` | Output file path (default: stdout). |
-| | `--copy, -c` | Copy markdown bundle to clipboard. |
 | | `--json` | Output machine-readable JSON bundle. |
 | `prv diagram` | `--staged, -s` | Generate diagram from staged changes. |
 | | `--branch, -b` | Compare specific branch. |
@@ -332,7 +345,7 @@ review_matrix:
 | | `--inline, -i` | Include line-level inline diff comments. |
 | | `--copy, -c` | Copy comments to clipboard. |
 | `prv matrix` | | Print the 11-Dimension Engineering PR Review Matrix. |
-| `prv init` | `--force` | Generate `.prv.yaml` configuration file. |
+| `prv init` | `--context-dir` | Scaffold `.prv.yaml` and context directory with starter `template.md`. |
 | `prv version` | | Print current version and release target. |
 
 ---

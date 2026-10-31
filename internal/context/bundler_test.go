@@ -1,6 +1,7 @@
 package context
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -362,5 +363,250 @@ review:
 
 	if ctxDefault.Metadata.BaseBranch != "staging" {
 		t.Errorf("expected BaseBranch from config to be 'staging', got %q", ctxDefault.Metadata.BaseBranch)
+	}
+}
+
+func TestBundler_ToMarkdown_WithReviewerContext(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:       "Feature Auth",
+			HeadBranch:  "feat/auth",
+			BaseBranch:  "main",
+			Description: "Author description of auth changes.",
+		},
+		UserContext: []models.UserContextDoc{
+			{
+				SourcePath: "12.md",
+				Content:    "### Goal\nImplement JWT authentication.",
+			},
+		},
+		ArchitectureDiagram: "graph LR\n  A --> B",
+	}
+
+	md := bundler.ToMarkdown(ctx)
+
+	// Verify Reviewer-Provided Context section is present
+	if !strings.Contains(md, "## 📝 Reviewer-Provided Context (Design Intent & Spec)") {
+		t.Error("expected Reviewer-Provided Context section header")
+	}
+	if !strings.Contains(md, "### 📄 Document: `12.md`") {
+		t.Error("expected document badge with source path")
+	}
+	if !strings.Contains(md, "### Goal\nImplement JWT authentication.") {
+		t.Error("expected normalized document content")
+	}
+
+	// Verify section ordering: PR Description -> Reviewer-Provided Context -> Architecture Diagram
+	descIdx := strings.Index(md, "## PR Description / Intent")
+	ctxIdx := strings.Index(md, "## 📝 Reviewer-Provided Context (Design Intent & Spec)")
+	diagIdx := strings.Index(md, "## 🗺️ Architecture & Component Impact Diagram")
+
+	if descIdx == -1 || ctxIdx == -1 || diagIdx == -1 {
+		t.Fatalf("expected all 3 sections in markdown, got descIdx=%d ctxIdx=%d diagIdx=%d", descIdx, ctxIdx, diagIdx)
+	}
+	if descIdx >= ctxIdx || ctxIdx >= diagIdx {
+		t.Errorf("expected ordering: Description (%d) < Context (%d) < Diagram (%d)", descIdx, ctxIdx, diagIdx)
+	}
+}
+
+func TestBundler_ToMarkdown_MultipleContextFiles(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "Feature Multi-Context",
+			HeadBranch: "feat/multi",
+			BaseBranch: "main",
+		},
+		UserContext: []models.UserContextDoc{
+			{
+				SourcePath: "specs/canvas.md",
+				Content:    "### Reason Canvas",
+			},
+			{
+				SourcePath: "specs/criteria.md",
+				Content:    "### Acceptance Criteria",
+			},
+		},
+	}
+
+	md := bundler.ToMarkdown(ctx)
+
+	if !strings.Contains(md, "### 📄 Document: `specs/canvas.md`") {
+		t.Error("expected first document badge")
+	}
+	if !strings.Contains(md, "### 📄 Document: `specs/criteria.md`") {
+		t.Error("expected second document badge")
+	}
+	if !strings.Contains(md, "### Reason Canvas") || !strings.Contains(md, "### Acceptance Criteria") {
+		t.Error("expected both document contents in output")
+	}
+}
+
+func TestBundler_ToMarkdown_WithoutContext_ZeroRegression(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:       "Regression Check",
+			HeadBranch:  "feat/reg",
+			BaseBranch:  "main",
+			Description: "Original PR description",
+		},
+		UserContext: nil,
+	}
+
+	md := bundler.ToMarkdown(ctx)
+
+	if strings.Contains(md, "Reviewer-Provided Context") {
+		t.Error("did not expect Reviewer-Provided Context section when UserContext is nil")
+	}
+}
+
+func TestBundler_ToJSON_UserContextSerialization(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "JSON Test",
+			HeadBranch: "feat/json",
+			BaseBranch: "main",
+		},
+		UserContext: []models.UserContextDoc{
+			{
+				SourcePath: "12.md",
+				Content:    "### Test Spec",
+			},
+		},
+	}
+
+	jsonStr, err := bundler.ToJSON(ctx)
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+
+	var parsed models.PRContext
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		t.Fatalf("failed to unmarshal generated JSON: %v", err)
+	}
+
+	if len(parsed.UserContext) != 1 {
+		t.Fatalf("expected 1 UserContextDoc in parsed JSON, got %d", len(parsed.UserContext))
+	}
+	if parsed.UserContext[0].SourcePath != "12.md" {
+		t.Errorf("expected SourcePath '12.md', got %q", parsed.UserContext[0].SourcePath)
+	}
+	if parsed.UserContext[0].Content != "### Test Spec" {
+		t.Errorf("expected Content '### Test Spec', got %q", parsed.UserContext[0].Content)
+	}
+}
+
+func TestBundler_PrepareBundle_WithContextFile(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cmd := exec.Command("git", "init", "-b", "main")
+	cmd.Dir = tempDir
+	if err := cmd.Run(); err != nil {
+		runGitInDir(t, tempDir, "init")
+		runGitInDir(t, tempDir, "checkout", "-b", "main")
+	}
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+
+	_ = os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte("v1\n"), 0644)
+	runGitInDir(t, tempDir, "add", "file.txt")
+	runGitInDir(t, tempDir, "commit", "-m", "init")
+
+	// Create staged change
+	_ = os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte("v2\n"), 0644)
+	runGitInDir(t, tempDir, "add", "file.txt")
+
+	// Create context file
+	specPath := filepath.Join(tempDir, "spec.md")
+	_ = os.WriteFile(specPath, []byte("# Feature Goal\nMust support v2."), 0644)
+
+	bundler := NewBundler(tempDir)
+	opts := models.BundleOptions{
+		RepoPath:     tempDir,
+		Staged:       true,
+		ContextFiles: []string{specPath},
+	}
+
+	ctx, err := bundler.PrepareBundle(opts)
+	if err != nil {
+		t.Fatalf("PrepareBundle failed: %v", err)
+	}
+
+	if len(ctx.UserContext) != 1 {
+		t.Fatalf("expected 1 UserContextDoc, got %d", len(ctx.UserContext))
+	}
+	if !strings.Contains(ctx.UserContext[0].Content, "### Feature Goal") {
+		t.Errorf("expected normalized heading '### Feature Goal', got: %s", ctx.UserContext[0].Content)
+	}
+}
+
+func TestBundler_PrepareBundle_AutoDiscovery_CurrentBranchWithoutFlag(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cmd := exec.Command("git", "init", "-b", "main")
+	cmd.Dir = tempDir
+	if err := cmd.Run(); err != nil {
+		runGitInDir(t, tempDir, "init")
+		runGitInDir(t, tempDir, "checkout", "-b", "main")
+	}
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+
+	_ = os.WriteFile(filepath.Join(tempDir, "base.txt"), []byte("v1\n"), 0644)
+	runGitInDir(t, tempDir, "add", "base.txt")
+	runGitInDir(t, tempDir, "commit", "-m", "init")
+
+	runGitInDir(t, tempDir, "checkout", "-b", "feat/auto-branch")
+	_ = os.WriteFile(filepath.Join(tempDir, "feature.go"), []byte("package feature\n"), 0644)
+	runGitInDir(t, tempDir, "add", "feature.go")
+	runGitInDir(t, tempDir, "commit", "-m", "add feature")
+
+	// Drop spec in .prv/context/feat-auto-branch.md
+	ctxDir := filepath.Join(tempDir, ".prv", "context")
+	_ = os.MkdirAll(ctxDir, 0755)
+	_ = os.WriteFile(filepath.Join(ctxDir, "feat-auto-branch.md"), []byte("# Auto Branch Spec"), 0644)
+
+	bundler := NewBundler(tempDir)
+	// Do NOT pass opts.Branch — PrepareBundle must detect current branch and auto-discover the spec
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath:   tempDir,
+		BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle failed: %v", err)
+	}
+	if len(ctx.UserContext) != 1 || !strings.Contains(ctx.UserContext[0].Content, "### Auto Branch Spec") {
+		t.Fatalf("expected auto-discovered spec for current branch, got: %+v", ctx.UserContext)
+	}
+}
+
+func TestBundler_ToMarkdown_ModifiedContextFileWarning(t *testing.T) {
+	bundler := NewBundler(".")
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "PR Modifying Spec",
+			HeadBranch: "feat/x",
+			BaseBranch: "main",
+		},
+		UserContext: []models.UserContextDoc{
+			{
+				SourcePath: ".prv/context/feat-x.md",
+				Content:    "### Spec",
+			},
+		},
+		Files: []models.FileChange{
+			{
+				Path:      ".prv/context/feat-x.md",
+				Additions: 5,
+			},
+		},
+	}
+
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "was modified in this change") {
+		t.Errorf("expected caution banner when context file is modified in diff, got:\n%s", md)
 	}
 }

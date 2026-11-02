@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vubon/prv/internal/config"
 	"github.com/vubon/prv/internal/models"
 )
 
@@ -608,5 +609,81 @@ func TestBundler_ToMarkdown_ModifiedContextFileWarning(t *testing.T) {
 	md := bundler.ToMarkdown(ctx)
 	if !strings.Contains(md, "was modified in this change") {
 		t.Errorf("expected caution banner when context file is modified in diff, got:\n%s", md)
+	}
+}
+
+func TestBundler_PrepareBundle_DirtyWithChanges(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cmd := exec.Command("git", "init", "-b", "main")
+	cmd.Dir = tempDir
+	if err := cmd.Run(); err != nil {
+		runGitInDir(t, tempDir, "init")
+		runGitInDir(t, tempDir, "checkout", "-b", "main")
+	}
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+
+	_ = os.WriteFile(filepath.Join(tempDir, "tracked.go"), []byte("package main\n"), 0644)
+	runGitInDir(t, tempDir, "add", "tracked.go")
+	runGitInDir(t, tempDir, "commit", "-m", "init")
+
+	// Modify tracked.go in working tree WITHOUT staging (unstaged modification)
+	_ = os.WriteFile(filepath.Join(tempDir, "tracked.go"), []byte("package main\n\nfunc Dirty() {}\n"), 0644)
+
+	bundler := NewBundler(tempDir)
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath: tempDir,
+		Dirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle with Dirty=true failed: %v", err)
+	}
+	if len(ctx.Files) != 1 || ctx.Files[0].Path != "tracked.go" {
+		t.Fatalf("expected tracked.go in dirty bundle, got: %+v", ctx.Files)
+	}
+	if ctx.Metadata.BaseBranch != "HEAD (working tree)" {
+		t.Errorf("unexpected BaseBranch: %q", ctx.Metadata.BaseBranch)
+	}
+}
+
+func TestBundler_PrepareBundle_MaxDiffLinesAndTruncatedMarkdown(t *testing.T) {
+	bundler := NewBundler(".")
+	cfg := config.DefaultConfig()
+	cfg.Review.MaxDiffLines = 3
+
+	meta := &models.PRMetadata{
+		Title:      "Large PR",
+		HeadBranch: "feat/large",
+		BaseBranch: "main",
+	}
+	files := []models.FileChange{
+		{
+			Path:      "README.md",
+			Additions: 4,
+			DiffHunk:  "+d1\n+d2\n+d3\n+d4\n",
+		},
+		{
+			Path:      "internal/auth/token.go",
+			Additions: 2,
+			DiffHunk:  "+s1\n+s2\n",
+		},
+	}
+
+	ctx := bundler.buildContext(meta, files, nil, cfg)
+	if ctx.SummaryStats.TruncatedFiles != 1 {
+		t.Fatalf("expected 1 truncated file, got %d", ctx.SummaryStats.TruncatedFiles)
+	}
+	// Sensitive file internal/auth/token.go must NOT be truncated; README.md must be truncated
+	if !ctx.Files[0].IsTruncated {
+		t.Errorf("expected README.md to be truncated")
+	}
+	if ctx.Files[1].IsTruncated {
+		t.Errorf("expected sensitive file internal/auth/token.go to be kept intact")
+	}
+
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "Diff Budget:") || !strings.Contains(md, "`[TRUNCATED]`") {
+		t.Errorf("expected Diff Budget summary and [TRUNCATED] badge in markdown, got:\n%s", md)
 	}
 }

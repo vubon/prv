@@ -154,7 +154,7 @@ func LoadContextFiles(opts models.BundleOptions, cfg *config.Config) ([]models.U
 
 			normalized := NormalizeMarkdownHeadings(string(data))
 			docs = append(docs, models.UserContextDoc{
-				SourcePath: path,
+				SourcePath: sanitizeSourcePath(path, resolvedPath, opts.RepoPath),
 				Content:    normalized,
 			})
 		}
@@ -189,7 +189,7 @@ func LoadContextFiles(opts models.BundleOptions, cfg *config.Config) ([]models.U
 				}
 				normalized := NormalizeMarkdownHeadings(string(data))
 				docs = append(docs, models.UserContextDoc{
-					SourcePath: relPath,
+					SourcePath: filepath.ToSlash(relPath),
 					Content:    normalized,
 				})
 				// Auto-discovery selects the highest precedence matching candidate
@@ -199,6 +199,22 @@ func LoadContextFiles(opts models.BundleOptions, cfg *config.Config) ([]models.U
 	}
 
 	return docs, nil
+}
+
+func sanitizeSourcePath(rawPath, resolvedPath, repoPath string) string {
+	if repoPath != "" {
+		absRepo, repoErr := filepath.Abs(repoPath)
+		absFile, fileErr := filepath.Abs(resolvedPath)
+		if repoErr == nil && fileErr == nil {
+			if rel, relErr := filepath.Rel(absRepo, absFile); relErr == nil && filepath.IsLocal(rel) {
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	if filepath.IsAbs(rawPath) || !filepath.IsLocal(rawPath) {
+		return filepath.Base(rawPath)
+	}
+	return filepath.ToSlash(rawPath)
 }
 
 func resolveFilePath(path, repoPath string) string {
@@ -266,8 +282,14 @@ func generateCandidateFileNames(opts models.BundleOptions) []string {
 		}
 	}
 
-	// Case B: Staged / Pre-Commit
-	if opts.Staged {
+	// Case B: Working Tree (--dirty) or Staged (--staged)
+	if opts.Dirty {
+		candidates = append(candidates,
+			"dirty.md",
+			"staged.md",
+			"pre-commit.md",
+		)
+	} else if opts.Staged {
 		candidates = append(candidates,
 			"staged.md",
 			"pre-commit.md",

@@ -238,3 +238,23 @@ func TestCLI_Init_FlagsAfterPositionalArg(t *testing.T) {
 		t.Fatalf("expected custom context directory at %s when flag follows positional arg, got: %v", customContextDir, err)
 	}
 }
+
+func TestBundleFlags_DirtyAndMaxLines(t *testing.T) {
+	fs := flag.NewFlagSet("bundle", flag.ContinueOnError)
+	var dirty bool
+	var maxLines int
+	fs.BoolVar(&dirty, "dirty", false, "")
+	fs.BoolVar(&dirty, "w", false, "")
+	fs.IntVar(&maxLines, "max-lines", 0, "")
+
+	pos := parseFlagsAndPositionals(fs, []string{"main", "-w", "--max-lines", "1500"})
+	if !dirty {
+		t.Errorf("expected dirty=true from -w flag")
+	}
+	if maxLines != 1500 {
+		t.Errorf("expected maxLines=1500, got %d", maxLines)
+	}
+	if len(pos) != 1 || pos[0] != "main" {
+		t.Errorf("expected positional 'main', got %+v", pos)
+	}
+}

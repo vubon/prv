@@ -275,6 +275,7 @@ context:
 review:
   persona: "staff-advisory"
   # default_base_branch: "staging"
+  # max_diff_lines: 3000
 
   strictness:
     blocking_dimensions:
@@ -330,15 +331,19 @@ review:
 | :--- | :--- | :--- |
 | `prv bundle` | `--branch, -b` | Target branch to compare against base. |
 | | `--base, -B` | Base branch (default: `main` or `default_base_branch` in `.prv.yaml`). |
-| | `--staged, -s` | Bundle uncommitted staged git changes. |
+| | `--staged, -s` | Bundle uncommitted staged git changes (`git diff --cached`). |
+| | `--dirty, -w` | Bundle uncommitted working-tree and staged changes (`git diff HEAD`). |
 | | `--context-file, -c` | Path to markdown context/spec file (repeatable). |
+| | `--max-lines` | Maximum total diff lines to include in bundle (risk-tiered; `0` = unlimited). |
 | | `--pr` | GitHub PR number or full URL. |
 | | `--output, -o` | Output file path (default: stdout). |
 | | `--json` | Output machine-readable JSON bundle. |
 | `prv diagram` | `--staged, -s` | Generate diagram from staged changes. |
+| | `--dirty, -w` | Generate diagram from working-tree and staged changes. |
 | | `--branch, -b` | Compare specific branch. |
-| | `--raw` | Output raw Mermaid syntax only. |
+| | `--markdown, -m` | Wrap Mermaid output inside a ```` ```mermaid ```` fence. |
 | `prv walkthrough`| `--staged, -s` | Generate walkthrough from staged changes. |
+| | `--dirty, -w` | Generate walkthrough from working-tree and staged changes. |
 | | `--branch, -b` | Walkthrough for specific branch. |
 | `prv report` | `--file, -f` | Path to JSON review result file. |
 | | `--post, -p` | Publish review report to GitHub PR. |

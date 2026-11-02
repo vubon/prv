@@ -210,6 +210,27 @@ func (g *GitRunner) GetStagedDiff(includeLocks bool) ([]models.FileChange, error
 	return ParseUnifiedDiff(diffOutput, includeLocks)
 }
 
+// GetWorkingTreeDiff runs git diff HEAD (falling back to unstaged/staged diff on unborn HEAD)
+// and returns parsed file changes for uncommitted working tree and staged changes.
+func (g *GitRunner) GetWorkingTreeDiff(includeLocks bool) ([]models.FileChange, error) {
+	if _, verifyErr := g.runCmd("rev-parse", "--verify", "HEAD"); verifyErr == nil {
+		diffOutput, err := g.runCmd("diff", "HEAD")
+		if err != nil {
+			return nil, fmt.Errorf("could not compute working tree diff: %w", err)
+		}
+		return ParseUnifiedDiff(diffOutput, includeLocks)
+	}
+
+	// Unborn HEAD fallback (repository with no initial commit yet)
+	stagedOut, stagedErr := g.runCmd("diff", "--cached")
+	unstagedOut, unstagedErr := g.runCmd("diff")
+	if stagedErr != nil && unstagedErr != nil {
+		return nil, fmt.Errorf("could not compute working tree diff: %w", unstagedErr)
+	}
+	combined := strings.TrimSpace(stagedOut + "\n" + unstagedOut)
+	return ParseUnifiedDiff(combined, includeLocks)
+}
+
 // ParseUnifiedDiff parses a raw unified diff string into structured FileChange objects.
 func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, error) {
 	var files []models.FileChange

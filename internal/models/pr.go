@@ -26,6 +26,7 @@ type FileChange struct {
 	IsFiltered   bool   `json:"is_filtered,omitempty"`
 	FilterReason string `json:"filter_reason,omitempty"`
 	IsSensitive  bool   `json:"is_sensitive,omitempty"`
+	IsTruncated  bool   `json:"is_truncated,omitempty"`
 }
 
 // UserContextDoc holds an ingested external reviewer context document (e.g. SPDD canvas, RFC, or spec).
@@ -54,6 +55,7 @@ type SummaryStats struct {
 	TotalFiles     int `json:"total_files"`
 	ReviewedFiles  int `json:"reviewed_files"`
 	FilteredFiles  int `json:"filtered_files"`
+	TruncatedFiles int `json:"truncated_files,omitempty"`
 	TotalAdditions int `json:"total_additions"`
 	TotalDeletions int `json:"total_deletions"`
 }
@@ -66,9 +68,9 @@ type BundleOptions struct {
 	RepoPath     string
 	ConfigPath   string // Optional custom path to .prv.yaml
 	Staged       bool   // Bundle git staged changes (--cached) for local self-review
+	Dirty        bool   // Bundle uncommitted working tree and staged changes (git diff HEAD)
 	FormatJSON   bool
 	IncludeLocks bool
-	MaxDiffLines int
-	CloneCache   bool
+	MaxDiffLines int      // Optional diff line budget cap (--max-lines; 0 = unlimited)
 	ContextFiles []string // Explicit reviewer context file paths (--context-file)
 }

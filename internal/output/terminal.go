@@ -32,6 +32,9 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	if len(ctx.SensitiveFiles) > 0 {
 		fmt.Printf("   %sSecurity:%s    %s🚨 %d sensitive paths touched%s\n", colorBold, colorReset, colorRed, len(ctx.SensitiveFiles), colorReset)
 	}
+	if ctx.SummaryStats.TruncatedFiles > 0 {
+		fmt.Printf("   %sBudget:%s      %s✂️ %d files truncated to fit line limit%s\n", colorBold, colorReset, colorYellow, ctx.SummaryStats.TruncatedFiles, colorReset)
+	}
 	if len(ctx.CustomRules) > 0 {
 		fmt.Printf("   %sStandards:%s   %d custom rules active (.prv.yaml)\n", colorBold, colorReset, len(ctx.CustomRules))
 	}
@@ -43,11 +46,14 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	if len(ctx.Files) > 0 {
 		fmt.Printf("%sChanged Files to Review:%s\n", colorBold, colorReset)
 		for _, f := range ctx.Files {
-			sensitiveBadge := ""
+			badges := ""
 			if f.IsSensitive {
-				sensitiveBadge = fmt.Sprintf(" %s[SENSITIVE]%s", colorRed, colorReset)
+				badges += fmt.Sprintf(" %s[SENSITIVE]%s", colorRed, colorReset)
 			}
-			fmt.Printf("  • %-45s %s(+%d / -%d)%s%s\n", f.Path, colorCyan, f.Additions, f.Deletions, colorReset, sensitiveBadge)
+			if f.IsTruncated {
+				badges += fmt.Sprintf(" %s[TRUNCATED]%s", colorYellow, colorReset)
+			}
+			fmt.Printf("  • %-45s %s(+%d / -%d)%s%s\n", f.Path, colorCyan, f.Additions, f.Deletions, colorReset, badges)
 		}
 		fmt.Println()
 	}

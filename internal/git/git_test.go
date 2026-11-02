@@ -373,3 +373,44 @@ func TestGitRunner_GetDiff_RefValidation(t *testing.T) {
 		t.Error("expected error for baseRef containing '..', got nil")
 	}
 }
+
+func TestGitRunner_GetWorkingTreeDiff(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	// Case 1: Unborn HEAD (staged file before first commit)
+	fileA := filepath.Join(tempDir, "initial.go")
+	if err := os.WriteFile(fileA, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunGit(t, runner, "add", "initial.go")
+
+	unbornChanges, err := runner.GetWorkingTreeDiff(false)
+	if err != nil {
+		t.Fatalf("GetWorkingTreeDiff on unborn HEAD failed: %v", err)
+	}
+	if len(unbornChanges) != 1 || unbornChanges[0].Path != "initial.go" {
+		t.Fatalf("expected 1 file on unborn HEAD, got: %+v", unbornChanges)
+	}
+
+	// Commit initial.go, then make an unstaged modification
+	mustRunGit(t, runner, "commit", "-m", "init")
+	if err := os.WriteFile(fileA, []byte("package main\n\nfunc Main() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	changes, err := runner.GetWorkingTreeDiff(false)
+	if err != nil {
+		t.Fatalf("GetWorkingTreeDiff failed: %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "initial.go" {
+		t.Fatalf("expected unstaged modification in initial.go, got: %+v", changes)
+	}
+}

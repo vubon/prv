@@ -99,8 +99,8 @@ func TestLoadContextFiles_ExplicitExisting(t *testing.T) {
 		t.Fatalf("expected 1 doc, got %d", len(docs))
 	}
 
-	if docs[0].SourcePath != specFile {
-		t.Errorf("expected source path %q, got %q", specFile, docs[0].SourcePath)
+	if docs[0].SourcePath != "spec.md" {
+		t.Errorf("expected repo-relative source path %q, got %q", "spec.md", docs[0].SourcePath)
 	}
 
 	if !strings.Contains(docs[0].Content, "### Feature Spec") {
@@ -396,5 +396,53 @@ func TestLoadContextFiles_RejectsYAMLFile(t *testing.T) {
 	_, err := LoadContextFiles(opts, config.DefaultConfig())
 	if err == nil || !strings.Contains(err.Error(), "looks like a YAML config") {
 		t.Fatalf("expected helpful YAML config error, got: %v", err)
+	}
+}
+
+func TestLoadContextFiles_ExplicitExternalPathSanitizedToBase(t *testing.T) {
+	repoDir := t.TempDir()
+	externalDir := t.TempDir()
+	externalSpec := filepath.Join(externalDir, "external_canvas.md")
+	if err := os.WriteFile(externalSpec, []byte("# External Spec"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := models.BundleOptions{
+		RepoPath:     repoDir,
+		ContextFiles: []string{externalSpec},
+	}
+	docs, err := LoadContextFiles(opts, config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("LoadContextFiles failed: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("expected 1 doc, got %d", len(docs))
+	}
+	if docs[0].SourcePath != "external_canvas.md" {
+		t.Errorf("expected external path sanitized to basename 'external_canvas.md', got %q", docs[0].SourcePath)
+	}
+}
+
+func TestLoadContextFiles_AutoDiscovery_Dirty(t *testing.T) {
+	tmpDir := t.TempDir()
+	contextDir := filepath.Join(tmpDir, ".prv", "context")
+	if err := os.MkdirAll(contextDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(contextDir, "dirty.md"), []byte("# Working Tree Spec"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := models.BundleOptions{
+		RepoPath: tmpDir,
+		Dirty:    true,
+	}
+	docs, err := LoadContextFiles(opts, config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("LoadContextFiles failed: %v", err)
+	}
+	if len(docs) != 1 || !strings.Contains(docs[0].Content, "Working Tree Spec") {
+		t.Errorf("expected dirty.md match, got: %+v", docs)
 	}
 }

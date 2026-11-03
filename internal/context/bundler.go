@@ -41,17 +41,13 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		cfg = config.DefaultConfig()
 	}
 
-	// Resolve current branch if omitted so auto-discovery can find branch-named context files
-	if opts.Branch == "" && opts.PRIdentifier == "" && b.gitRunner.IsGitRepo() {
-		if curr, err := b.gitRunner.GetCurrentBranch(); err == nil && curr != "" {
-			opts.Branch = curr
+	// If explicit context files (-c) were provided, validate and load them upfront (fail-fast)
+	var userContextDocs []models.UserContextDoc
+	if len(opts.ContextFiles) > 0 {
+		userContextDocs, err = LoadContextFiles(opts, cfg)
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	// Load reviewer-provided context files (explicit or auto-discovered)
-	userContextDocs, err := LoadContextFiles(opts, cfg)
-	if err != nil {
-		return nil, err
 	}
 
 	// Case 1: Remote GitHub PR URL or Number (Zero-Clone Policy)
@@ -91,19 +87,36 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		// In zero-clone mode, if no explicit --config was provided and the local directory
 		// is not a clone of the target PR repository, use default configuration to avoid
 		// leaking unrelated local rules into a foreign PR review.
-		effectiveCfg := cfg
+		effectiveCfg := *cfg
 		isForeignRepo := meta.Repo != "" && !b.isLocalRepoMatch(meta.Repo)
 		if opts.ConfigPath == "" && isForeignRepo {
-			effectiveCfg = config.DefaultConfig()
+			effectiveCfg = *config.DefaultConfig()
+		}
+		if opts.MaxDiffLines > 0 {
+			effectiveCfg.Review.MaxDiffLines = opts.MaxDiffLines
 		}
 
-		// Do not leak auto-discovered local context files into a foreign PR review
+		// Auto-discover local context files only when reviewing a matching repository.
+		// Populate opts.Branch from meta.HeadBranch so auto-discovery can fall back to
+		// <head-branch>.md when <pr-id>.md is not present.
 		effectiveUserContext := userContextDocs
-		if isForeignRepo && len(opts.ContextFiles) == 0 {
-			effectiveUserContext = nil
+		if !isForeignRepo && len(opts.ContextFiles) == 0 {
+			optsWithBranch := opts
+			if optsWithBranch.Branch == "" && meta.HeadBranch != "" {
+				optsWithBranch.Branch = meta.HeadBranch
+			}
+			effectiveUserContext, err = LoadContextFiles(optsWithBranch, &effectiveCfg)
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		return b.buildContext(meta, fileChanges, effectiveUserContext, effectiveCfg), nil
+		return b.buildContext(meta, fileChanges, effectiveUserContext, &effectiveCfg), nil
+	}
+
+	effectiveCfg := *cfg
+	if opts.MaxDiffLines > 0 {
+		effectiveCfg.Review.MaxDiffLines = opts.MaxDiffLines
 	}
 
 	// Case 2: Staged Changes (--staged)
@@ -115,6 +128,15 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		currentBranch, err := b.gitRunner.GetCurrentBranch()
 		if err != nil || currentBranch == "" {
 			currentBranch = "HEAD"
+		}
+		if opts.Branch == "" && currentBranch != "HEAD" {
+			opts.Branch = currentBranch
+		}
+		if len(opts.ContextFiles) == 0 {
+			userContextDocs, err = LoadContextFiles(opts, &effectiveCfg)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		stagedChanges, diffErr := b.gitRunner.GetStagedDiff(opts.IncludeLocks)
@@ -134,7 +156,47 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			CreatedAt:   time.Now(),
 		}
 
-		return b.buildContext(meta, stagedChanges, userContextDocs, cfg), nil
+		return b.buildContext(meta, stagedChanges, userContextDocs, &effectiveCfg), nil
+	}
+
+	// Case 2b: Working Tree Uncommitted Changes (--dirty)
+	if opts.Dirty {
+		if !b.gitRunner.IsGitRepo() {
+			return nil, fmt.Errorf("not a git repository: cannot inspect working tree changes in %s", opts.RepoPath)
+		}
+
+		currentBranch, err := b.gitRunner.GetCurrentBranch()
+		if err != nil || currentBranch == "" {
+			currentBranch = "HEAD"
+		}
+		if opts.Branch == "" && currentBranch != "HEAD" {
+			opts.Branch = currentBranch
+		}
+		if len(opts.ContextFiles) == 0 {
+			userContextDocs, err = LoadContextFiles(opts, &effectiveCfg)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		workingChanges, diffErr := b.gitRunner.GetWorkingTreeDiff(opts.IncludeLocks)
+		if diffErr != nil {
+			return nil, fmt.Errorf("failed to get working tree changes: %w", diffErr)
+		}
+
+		if len(workingChanges) == 0 {
+			return nil, fmt.Errorf("no uncommitted working tree or staged changes found")
+		}
+
+		meta := &models.PRMetadata{
+			Title:       "Pre-commit Self-Review (Working Tree Changes)",
+			Description: "Uncommitted working tree and staged changes compared against HEAD.",
+			BaseBranch:  "HEAD (working tree)",
+			HeadBranch:  currentBranch,
+			CreatedAt:   time.Now(),
+		}
+
+		return b.buildContext(meta, workingChanges, userContextDocs, &effectiveCfg), nil
 	}
 
 	// Case 3: Local Git Repository Branch
@@ -147,6 +209,14 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		headBranch, err = b.gitRunner.GetCurrentBranch()
 		if err != nil {
 			return nil, fmt.Errorf("failed to detect current branch: %w", err)
+		}
+		opts.Branch = headBranch
+	}
+
+	if len(opts.ContextFiles) == 0 {
+		userContextDocs, err = LoadContextFiles(opts, &effectiveCfg)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -217,7 +287,7 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		}
 	}
 
-	return b.buildContext(meta, fileChanges, userContextDocs, cfg), nil
+	return b.buildContext(meta, fileChanges, userContextDocs, &effectiveCfg), nil
 }
 
 // buildContext computes stats, applies custom filters, flags sensitive files, and builds PRContext.
@@ -259,9 +329,12 @@ func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChang
 		}
 	}
 
-	ctx.SummaryStats = stats
 	ctx.ArchitectureDiagram = diagram.GenerateMermaid(b.repoPath, ctx.Files)
 	ctx.FileWalkthroughs = output.GenerateWalkthroughFromFiles(ctx.Files)
+	if cfg.Review.MaxDiffLines > 0 {
+		ctx.Files, stats.TruncatedFiles = ApplyDiffBudget(ctx.Files, cfg.Review.MaxDiffLines)
+	}
+	ctx.SummaryStats = stats
 	return ctx
 }
 
@@ -289,6 +362,9 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 
 	if len(ctx.IgnoredFiles) > 0 {
 		fmt.Fprintf(&sb, "- **Noise Filtered:** %d files ignored\n", len(ctx.IgnoredFiles))
+	}
+	if ctx.SummaryStats.TruncatedFiles > 0 {
+		fmt.Fprintf(&sb, "- **Diff Budget:** %d files truncated to fit line limit\n", ctx.SummaryStats.TruncatedFiles)
 	}
 	if ctx.Persona != "" {
 		fmt.Fprintf(&sb, "- **Review Persona:** `%s`\n", ctx.Persona)
@@ -358,11 +434,14 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 
 	sb.WriteString("## Code Diffs to Review\n\n")
 	for _, file := range ctx.Files {
-		sensitiveBadge := ""
+		badges := ""
 		if file.IsSensitive {
-			sensitiveBadge = " 🚨 `[SENSITIVE]`"
+			badges += " 🚨 `[SENSITIVE]`"
 		}
-		fmt.Fprintf(&sb, "### File: `%s` `(+%d / -%d)`%s\n\n", file.Path, file.Additions, file.Deletions, sensitiveBadge)
+		if file.IsTruncated {
+			badges += " ✂️ `[TRUNCATED]`"
+		}
+		fmt.Fprintf(&sb, "### File: `%s` `(+%d / -%d)`%s\n\n", file.Path, file.Additions, file.Deletions, badges)
 		sb.WriteString("```diff\n")
 		sb.WriteString(file.DiffHunk)
 		sb.WriteString("\n```\n\n")

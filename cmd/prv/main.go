@@ -39,16 +39,20 @@ Examples:
   prv bundle feat/payment staging      # Compare feature branch against staging
   prv bundle --branch feat/auth --base main
   prv bundle --staged                  # Review uncommitted staged changes
+  prv bundle --dirty                   # Review uncommitted working tree + staged changes
   prv bundle --staged -o staged.md
   prv bundle --staged -c spec.md       # Review staged changes with design spec
   prv bundle --pr 42 -c 42.md          # Review PR #42 with reviewer context
+  prv bundle --pr 42 --max-lines 1500  # Cap bundle diff at 1,500 lines (risk-tiered)
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
   prv diagram --base staging           # Generate architecture diagram against staging
   prv diagram -B dev
   prv diagram --staged
+  prv diagram --dirty
   prv walkthrough --base staging       # Generate file walkthrough against staging
   prv walkthrough -B dev
   prv walkthrough --staged
+  prv walkthrough --dirty
   prv report --file review.json --pr 42 --post
   prv report --file review.json --pr 42 --post --inline
   prv report --file review.json --copy
@@ -181,11 +185,15 @@ func (s *stringSliceFlag) Set(val string) error {
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
 	var branch, base, prID, repoPath, outputFile, configPath string
-	var formatJSON, includeLocks, staged bool
+	var formatJSON, includeLocks, staged, dirty bool
+	var maxLines int
 	var contextFiles stringSliceFlag
 
 	fs.BoolVar(&staged, "staged", false, "Bundle git staged changes (--cached) for local pre-commit review")
 	fs.BoolVar(&staged, "s", false, "Alias for --staged")
+
+	fs.BoolVar(&dirty, "dirty", false, "Bundle uncommitted working tree and staged changes for tracked files")
+	fs.BoolVar(&dirty, "w", false, "Alias for --dirty")
 
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
@@ -203,6 +211,8 @@ func runBundle(args []string) {
 	fs.Var(&contextFiles, "context-file", "Path to markdown context/spec file (repeatable)")
 	fs.Var(&contextFiles, "c", "Alias for --context-file")
 
+	fs.IntVar(&maxLines, "max-lines", 0, "Maximum total diff lines to include in bundle (0 = unlimited; risk-tiered)")
+
 	fs.BoolVar(&formatJSON, "json", false, "Output bundle as raw JSON to stdout")
 
 	fs.BoolVar(&includeLocks, "include-locks", false, "Include lockfiles and generated files in diff")
@@ -218,6 +228,18 @@ func runBundle(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
 		os.Exit(1)
 	}
+	if dirty && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --dirty and --pr\n")
+		os.Exit(1)
+	}
+	if staged && dirty {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --dirty\n")
+		os.Exit(1)
+	}
+	if maxLines < 0 {
+		fmt.Fprintf(os.Stderr, "Error: --max-lines must be >= 0\n")
+		os.Exit(1)
+	}
 
 	bundler := context.NewBundler(repoPath)
 	opts := models.BundleOptions{
@@ -227,8 +249,10 @@ func runBundle(args []string) {
 		RepoPath:     repoPath,
 		ConfigPath:   configPath,
 		Staged:       staged,
+		Dirty:        dirty,
 		FormatJSON:   formatJSON,
 		IncludeLocks: includeLocks,
+		MaxDiffLines: maxLines,
 		ContextFiles: contextFiles,
 	}
 
@@ -417,10 +441,13 @@ func runInit(args []string) {
 func runDiagram(args []string) {
 	fs := flag.NewFlagSet("diagram", flag.ExitOnError)
 	var branch, base, prID, repoPath, outputFile string
-	var staged, markdownFence bool
+	var staged, dirty, markdownFence bool
 
 	fs.BoolVar(&staged, "staged", false, "Generate diagram for git staged changes (--cached)")
 	fs.BoolVar(&staged, "s", false, "Alias for --staged")
+
+	fs.BoolVar(&dirty, "dirty", false, "Generate diagram for uncommitted working tree and staged changes")
+	fs.BoolVar(&dirty, "w", false, "Alias for --dirty")
 
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
@@ -447,6 +474,14 @@ func runDiagram(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
 		os.Exit(1)
 	}
+	if dirty && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --dirty and --pr\n")
+		os.Exit(1)
+	}
+	if staged && dirty {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --dirty\n")
+		os.Exit(1)
+	}
 
 	bundler := context.NewBundler(repoPath)
 	opts := models.BundleOptions{
@@ -455,6 +490,7 @@ func runDiagram(args []string) {
 		PRIdentifier: prID,
 		RepoPath:     repoPath,
 		Staged:       staged,
+		Dirty:        dirty,
 	}
 
 	bundleCtx, err := bundler.PrepareBundle(opts)
@@ -495,10 +531,13 @@ func runDiagram(args []string) {
 func runWalkthrough(args []string) {
 	fs := flag.NewFlagSet("walkthrough", flag.ExitOnError)
 	var branch, base, prID, repoPath, outputFile string
-	var staged, formatJSON bool
+	var staged, dirty, formatJSON bool
 
 	fs.BoolVar(&staged, "staged", false, "Generate walkthrough for git staged changes (--cached)")
 	fs.BoolVar(&staged, "s", false, "Alias for --staged")
+
+	fs.BoolVar(&dirty, "dirty", false, "Generate walkthrough for uncommitted working tree and staged changes")
+	fs.BoolVar(&dirty, "w", false, "Alias for --dirty")
 
 	fs.StringVar(&branch, "branch", "", "Feature branch name")
 	fs.StringVar(&branch, "b", "", "Alias for --branch")
@@ -524,6 +563,14 @@ func runWalkthrough(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --pr\n")
 		os.Exit(1)
 	}
+	if dirty && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --dirty and --pr\n")
+		os.Exit(1)
+	}
+	if staged && dirty {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --dirty\n")
+		os.Exit(1)
+	}
 
 	bundler := context.NewBundler(repoPath)
 	opts := models.BundleOptions{
@@ -532,6 +579,7 @@ func runWalkthrough(args []string) {
 		PRIdentifier: prID,
 		RepoPath:     repoPath,
 		Staged:       staged,
+		Dirty:        dirty,
 	}
 
 	bundleCtx, err := bundler.PrepareBundle(opts)

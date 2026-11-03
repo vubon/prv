@@ -24,8 +24,9 @@ type ContextConfig struct {
 
 // ReviewConfig contains rules, sensitive paths, persona, and strictness.
 type ReviewConfig struct {
-	Persona           string           `yaml:"persona"`             // e.g. "staff-advisory", "strict-linter", "mentor"
-	DefaultBaseBranch string           `yaml:"default_base_branch"` // e.g. "main", "staging", "dev", "develop"
+	Persona           string           `yaml:"persona"`                  // e.g. "staff-advisory", "strict-linter", "mentor"
+	DefaultBaseBranch string           `yaml:"default_base_branch"`      // e.g. "main", "staging", "dev", "develop"
+	MaxDiffLines      int              `yaml:"max_diff_lines,omitempty"` // Optional diff line budget cap (0 = unlimited)
 	Strictness        StrictnessConfig `yaml:"strictness"`
 	SensitivePaths    []string         `yaml:"sensitive_paths"` // Directories requiring extra security scrutiny
 	CustomRules       []string         `yaml:"custom_rules"`    // Team rules injected into review prompts
@@ -111,6 +112,9 @@ func LoadConfig(repoPath string, customConfigPath string) (*Config, error) {
 	}
 	if cfg.Context.MaxSizeKB < 0 {
 		cfg.Context.MaxSizeKB = 256
+	}
+	if cfg.Review.MaxDiffLines < 0 {
+		cfg.Review.MaxDiffLines = 0
 	}
 
 	return cfg, nil
@@ -230,6 +234,9 @@ review:
 
   # Default base branch to compare against (defaults to main/master if omitted)
   # default_base_branch: "staging"
+
+  # Maximum total diff lines to include in a bundle (0 = unlimited; truncates tests/docs before sensitive files)
+  # max_diff_lines: 3000
 
   # Strictness settings for verdicts
   strictness:

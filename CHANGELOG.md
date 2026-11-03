@@ -5,6 +5,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.12.0-beta] — 2026-11-02
+
+### Added
+- **Working-Tree Uncommitted Self-Review (`--dirty`, `-w`)**:
+  - Added `--dirty` (alias `-w`) to `prv bundle`, `prv diagram`, and `prv walkthrough` to inspect uncommitted working-tree and staged changes (`git diff HEAD`, with automatic fallback for unborn `HEAD` repositories).
+  - Auto-discovery in `.prv/context/` supports `dirty.md`, `staged.md`, `pre-commit.md`, and `<branch-slug>.md` when running `--dirty`.
+- **Risk-Tiered Diff Line Budgeting (`--max-lines` & `review.max_diff_lines`)**:
+  - Added `--max-lines <N>` CLI flag on `prv bundle` and `review.max_diff_lines` in `.prv.yaml` (default `0` = unlimited).
+  - Implemented `ApplyDiffBudget` with 3 priority tiers so `🚨 [SENSITIVE]` security paths (Tier 1) and core source code (Tier 2) are preserved in full while test and documentation files (Tier 3) are truncated or omitted first when over budget.
+  - Added `✂️ [TRUNCATED]` file badges and summary budget counters in terminal and Markdown bundle outputs.
+- **Remote PR Context Branch Fallback**:
+  - When reviewing a remote PR in a matching local repository (`prv bundle 12`), auto-discovery now populates `opts.Branch` from `meta.HeadBranch` so `.prv/context/<head-branch-slug>.md` acts as an automatic fallback if `12.md` is not present, while skipping local disk I/O entirely for foreign-repo PRs.
+
+### Changed
+- **Portable Context `SourcePath` Normalization**:
+  - Explicit `-c` context file paths are now normalized to repository-relative paths when inside the repo or to their basename when outside the repo, preventing local workstation paths from leaking into shared review reports.
+- **Cleaned Up `models.BundleOptions`**:
+  - Removed the unused `CloneCache` struct field for the `v0.12.0-beta` transition.
+
 ## [0.11.0-alpha] — 2026-10-31
 
 ### Added

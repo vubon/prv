@@ -55,7 +55,7 @@ func TestFormatWalkthroughMarkdown_StandardAndEdgeCases(t *testing.T) {
 	if !strings.Contains(output, "<details>") || !strings.Contains(output, "</details>") {
 		t.Errorf("output must contain <details> tags")
 	}
-	if !strings.Contains(output, "<summary><b>internal/git/github.go</b> (+22 / -4) — <i>Observability & PATH validation</i></summary>") {
+	if !strings.Contains(output, "<summary><b>internal/git/github.go</b> (+22 / -4) — <i>Observability &amp; PATH validation</i></summary>") {
 		t.Errorf("summary line for github.go did not match expected structure, got:\n%s", output)
 	}
 	// Check empty line after summary for GitHub Markdown compliance

@@ -36,6 +36,8 @@ prv bundle --staged --json | gh copilot explain
 prv bundle --branch feat/billing --json | gh copilot explain
 ```
 
+When `path_encoding` is `go-quoted`, decode path values that start with a double quote as Go string literals (for example, with `strconv.Unquote`). This preserves filenames with invalid UTF-8 bytes. The encoding applies to file and rename paths, walkthrough and prior-finding locations, sensitive paths, the modified config path, and ignored-file labels.
+
 ---
 
 ## 2. Terminal Review Helper Script

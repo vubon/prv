@@ -41,6 +41,22 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	if len(ctx.ForbiddenRules) > 0 || len(ctx.MandatedRules) > 0 {
 		fmt.Printf("   %sInvariants:%s  %d forbidden / %d mandated (.prv.yaml)\n", colorBold, colorReset, len(ctx.ForbiddenRules), len(ctx.MandatedRules))
 	}
+	if len(ctx.PriorFindings) > 0 {
+		touched := 0
+		for _, pf := range ctx.PriorFindings {
+			if pf.Touched {
+				touched++
+			}
+		}
+		fmt.Printf("   %sPrior:%s       %d findings (%d touched", colorBold, colorReset, len(ctx.PriorFindings), touched)
+		if ctx.PriorFindingsOmitted > 0 {
+			fmt.Printf(", %d omitted", ctx.PriorFindingsOmitted)
+		}
+		fmt.Println(")")
+	}
+	if ctx.PriorReviewPRMismatch {
+		fmt.Printf("   %sPrior:%s       The prior report identifies a different pull request.\n", colorBold, colorReset)
+	}
 	if ctx.ArchitectureDiagram != "" {
 		fmt.Printf("   %sDiagram:%s     %s🗺️ Mermaid component graph generated%s\n", colorBold, colorReset, colorCyan, colorReset)
 	}
@@ -56,7 +72,7 @@ func PrintBundleSummary(ctx *models.PRContext) {
 			if f.IsTruncated {
 				badges += fmt.Sprintf(" %s[TRUNCATED]%s", colorYellow, colorReset)
 			}
-			fmt.Printf("  • %-45s %s(+%d / -%d)%s%s\n", f.Path, colorCyan, f.Additions, f.Deletions, colorReset, badges)
+			fmt.Printf("  • %-45s %s(+%d / -%d)%s%s\n", singleLineText(f.Path), colorCyan, f.Additions, f.Deletions, colorReset, badges)
 		}
 		fmt.Println()
 	}
@@ -64,7 +80,7 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	if len(ctx.IgnoredFiles) > 0 {
 		fmt.Printf("%sFiltered Noise Files (%d):%s\n", colorBold, len(ctx.IgnoredFiles), colorReset)
 		for _, f := range ctx.IgnoredFiles {
-			fmt.Printf("  • %s\n", f)
+			fmt.Printf("  • %s\n", singleLineText(f))
 		}
 		fmt.Println()
 	}

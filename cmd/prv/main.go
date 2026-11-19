@@ -46,6 +46,7 @@ Examples:
   prv bundle --staged -c spec.md       # Review staged changes with design spec
   prv bundle --pr 42 -c 42.md          # Review PR #42 with reviewer context
   prv bundle --pr 42 --max-lines 1500  # Cap bundle diff at 1,500 lines (risk-tiered)
+  prv bundle --prior review.json       # Re-check findings from previous iteration
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
   prv diagram --base staging           # Generate architecture diagram against staging
   prv diagram -B dev
@@ -187,7 +188,7 @@ func (s *stringSliceFlag) Set(val string) error {
 
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
-	var branch, base, prID, repoPath, outputFile, configPath string
+	var branch, base, prID, repoPath, outputFile, configPath, priorPath string
 	var formatJSON, includeLocks, staged, dirty bool
 	var maxLines int
 	var contextFiles stringSliceFlag
@@ -210,6 +211,9 @@ func runBundle(args []string) {
 	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
 
 	fs.StringVar(&configPath, "config", "", "Custom path to .prv.yaml configuration file")
+
+	fs.StringVar(&priorPath, "prior", "", "Path to prior review JSON report for iteration re-check")
+	fs.StringVar(&priorPath, "P", "", "Alias for --prior")
 
 	fs.Var(&contextFiles, "context-file", "Path to markdown context/spec file (repeatable)")
 	fs.Var(&contextFiles, "c", "Alias for --context-file")
@@ -261,6 +265,7 @@ func runBundle(args []string) {
 		IncludeLocks: includeLocks,
 		MaxDiffLines: maxLines,
 		ContextFiles: contextFiles,
+		PriorPath:    priorPath,
 	}
 
 	bundleCtx, err := bundler.PrepareBundle(opts)

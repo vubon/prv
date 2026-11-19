@@ -2,9 +2,12 @@ package output
 
 import (
 	"fmt"
+	"html"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/vubon/prv/internal/models"
 )
@@ -35,6 +38,26 @@ func extractSymbol(text string) (name string, isType bool) {
 	return "", false
 }
 
+// singleLineText makes control characters and invalid UTF-8 visible in rendered paths.
+func singleLineText(s string) string {
+	if !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) >= 0 {
+		return strconv.Quote(s)
+	}
+	return s
+}
+
+// MarkdownPath renders a Git filename as a single inline code span.
+func MarkdownPath(name string) string {
+	text := singleLineText(name)
+	fence := backtickFenceFor(text, 1)
+	if strings.Contains(text, "`") || strings.HasPrefix(text, " ") || strings.HasSuffix(text, " ") {
+		if strings.Trim(text, " ") != "" {
+			text = " " + text + " "
+		}
+	}
+	return fence + text + fence
+}
+
 // FormatWalkthroughMarkdown generates clean, collapsible <details> HTML blocks
 // compatible with GitHub Flavored Markdown and popular previewers.
 func FormatWalkthroughMarkdown(walkthroughs []models.FileWalkthrough) string {
@@ -57,9 +80,9 @@ func FormatWalkthroughMarkdown(walkthroughs []models.FileWalkthrough) string {
 			metaParts = append(metaParts, "🚨 <b>[SENSITIVE]</b>")
 		}
 
-		summaryLine := fmt.Sprintf("<b>%s</b> %s", w.File, strings.Join(metaParts, " "))
+		summaryLine := fmt.Sprintf("<b>%s</b> %s", html.EscapeString(singleLineText(w.File)), strings.Join(metaParts, " "))
 		if strings.TrimSpace(w.Topic) != "" {
-			summaryLine = fmt.Sprintf("%s — <i>%s</i>", summaryLine, strings.TrimSpace(w.Topic))
+			summaryLine = fmt.Sprintf("%s — <i>%s</i>", summaryLine, html.EscapeString(singleLineText(strings.TrimSpace(w.Topic))))
 		}
 
 		sb.WriteString("<details>\n")
@@ -134,7 +157,7 @@ func extractChangesFromDiff(f models.FileChange) []string {
 
 	switch f.Status {
 	case "renamed":
-		changes = append(changes, fmt.Sprintf("Renamed from `%s`", f.OldPath))
+		changes = append(changes, "Renamed from "+MarkdownPath(f.OldPath))
 	case "deleted":
 		changes = append(changes, fmt.Sprintf("Deleted file (`-%d` lines removed)", f.Deletions))
 		return changes

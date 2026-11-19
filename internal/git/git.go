@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,11 @@ func (g *GitRunner) runCmd(args ...string) (string, error) {
 
 // runCmdAt executes a git command in an explicit directory.
 func (g *GitRunner) runCmdAt(dir string, args ...string) (string, error) {
+	out, err := g.runRawCmdAt(dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+func (g *GitRunner) runRawCmdAt(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
@@ -44,7 +50,7 @@ func (g *GitRunner) runCmdAt(dir string, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w (stderr: %s)", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return stdout.String(), nil
 }
 
 // GetRepoRoot returns the absolute path of the top-level repository root.
@@ -54,6 +60,23 @@ func (g *GitRunner) GetRepoRoot() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// HasExactPath checks the reviewed tree, or the index for an uncommitted
+// review. The runner must be rooted at the repository top level.
+func (g *GitRunner) HasExactPath(commit, file string) (bool, error) {
+	args := []string{"--literal-pathspecs", "ls-files", "-z"}
+	if commit != "" {
+		if !IsHexCommitID(commit) {
+			return false, fmt.Errorf("expected a commit ID, got %q", commit)
+		}
+		args = []string{"--literal-pathspecs", "ls-tree", "-z", "--name-only", commit}
+	}
+	out, err := g.runRawCmdAt(g.RepoPath, append(args, "--", file)...)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains("\x00"+out, "\x00"+file+"\x00"), nil
 }
 
 // GetRepoPrefix returns the working directory prefix relative to the repository root
@@ -231,12 +254,12 @@ func (g *GitRunner) GetDiff(baseBranch, headBranch string, includeLocks bool) ([
 	}
 
 	// Run git diff baseRef...headRef (three dots finds merge base)
-	diffOutput, err := g.runCmd("diff", fmt.Sprintf("%s...%s", baseRef, headRef))
+	diffOutput, err := g.runRawCmdAt(g.RepoPath, "diff", "--no-relative", fmt.Sprintf("%s...%s", baseRef, headRef))
 	if err != nil {
 		// Fallback to direct two-dot diff or local refs (handles disconnected root commits or shallow clones)
-		diffOutput, err = g.runCmd("diff", fmt.Sprintf("%s..%s", baseRef, headRef))
+		diffOutput, err = g.runRawCmdAt(g.RepoPath, "diff", "--no-relative", fmt.Sprintf("%s..%s", baseRef, headRef))
 		if err != nil {
-			diffOutput, err = g.runCmd("diff", fmt.Sprintf("%s..%s", baseBranch, headBranch))
+			diffOutput, err = g.runRawCmdAt(g.RepoPath, "diff", "--no-relative", fmt.Sprintf("%s..%s", baseBranch, headBranch))
 			if err != nil {
 				return nil, fmt.Errorf("could not compute diff between base '%s' and head '%s': %w", baseBranch, headBranch, err)
 			}
@@ -359,7 +382,7 @@ func (g *GitRunner) ResolveHeadCommit(headBranch string) (string, error) {
 
 // GetStagedDiff runs git diff --cached and returns parsed file changes for staged index.
 func (g *GitRunner) GetStagedDiff(includeLocks bool) ([]models.FileChange, error) {
-	diffOutput, err := g.runCmd("diff", "--cached")
+	diffOutput, err := g.runRawCmdAt(g.RepoPath, "diff", "--no-relative", "--cached")
 	if err != nil {
 		return nil, fmt.Errorf("could not compute staged diff: %w", err)
 	}
@@ -371,7 +394,7 @@ func (g *GitRunner) GetStagedDiff(includeLocks bool) ([]models.FileChange, error
 // and returns parsed file changes for uncommitted working tree and staged changes.
 func (g *GitRunner) GetWorkingTreeDiff(includeLocks bool) ([]models.FileChange, error) {
 	if _, verifyErr := g.runCmd("rev-parse", "--verify", "HEAD"); verifyErr == nil {
-		diffOutput, err := g.runCmd("diff", "HEAD")
+		diffOutput, err := g.runRawCmdAt(g.RepoPath, "diff", "--no-relative", "HEAD")
 		if err != nil {
 			return nil, fmt.Errorf("could not compute working tree diff: %w", err)
 		}
@@ -379,13 +402,12 @@ func (g *GitRunner) GetWorkingTreeDiff(includeLocks bool) ([]models.FileChange, 
 	}
 
 	// Unborn HEAD fallback (repository with no initial commit yet)
-	stagedOut, stagedErr := g.runCmd("diff", "--cached")
-	unstagedOut, unstagedErr := g.runCmd("diff")
+	stagedOut, stagedErr := g.runRawCmdAt(g.RepoPath, "diff", "--no-relative", "--cached")
+	unstagedOut, unstagedErr := g.runRawCmdAt(g.RepoPath, "diff", "--no-relative")
 	if stagedErr != nil && unstagedErr != nil {
 		return nil, fmt.Errorf("could not compute working tree diff: %w", unstagedErr)
 	}
-	combined := strings.TrimSpace(stagedOut + "\n" + unstagedOut)
-	return ParseUnifiedDiff(combined, includeLocks)
+	return ParseUnifiedDiff(stagedOut+unstagedOut, includeLocks)
 }
 
 // resolveCommitRef resolves ref (or origin/<ref> for unqualified branch names) to a valid commit ref,
@@ -638,15 +660,7 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 			}
 			inHunk = false
 
-			// Parse file path from: diff --git a/path/to/file b/path/to/file
-			header := strings.TrimPrefix(line, "diff --git ")
-			var filePath string
-			if idx := strings.Index(header, " b/"); idx != -1 {
-				filePath = header[idx+3:]
-			} else if parts := strings.Split(header, " "); len(parts) >= 2 {
-				filePath = strings.TrimPrefix(parts[len(parts)-1], "b/")
-			}
-			filePath = strings.Trim(filePath, "\"")
+			filePath := gitDiffDestination(strings.TrimPrefix(line, "diff --git "))
 
 			filtered, reason := false, ""
 			if !includeLocks {
@@ -674,16 +688,13 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 			currentFile.Status = "renamed"
 		} else if strings.HasPrefix(line, "rename from ") {
 			currentFile.Status = "renamed"
-			oldP := strings.TrimSpace(strings.TrimPrefix(line, "rename from "))
-			currentFile.OldPath = strings.Trim(oldP, "\"")
+			currentFile.OldPath = decodeGitDiffPath(strings.TrimPrefix(line, "rename from "))
 		} else if strings.HasPrefix(line, "rename to ") {
 			currentFile.Status = "renamed"
-			newP := strings.TrimSpace(strings.TrimPrefix(line, "rename to "))
-			currentFile.Path = strings.Trim(newP, "\"")
+			currentFile.Path = decodeGitDiffPath(strings.TrimPrefix(line, "rename to "))
 		} else if strings.HasPrefix(line, "+++ ") && !inHunk {
-			target := strings.TrimPrefix(line, "+++ ")
-			target = strings.TrimPrefix(target, "b/")
-			target = strings.Trim(target, "\"")
+			target := strings.TrimSuffix(strings.TrimPrefix(line, "+++ "), "\t")
+			target = strings.TrimPrefix(decodeGitDiffPath(target), "b/")
 			if target != "/dev/null" && target != "" && currentFile.Path == "" {
 				currentFile.Path = target
 			}
@@ -719,6 +730,42 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 	}
 
 	return files, nil
+}
+
+func gitDiffDestination(header string) string {
+	if strings.HasPrefix(header, "\"") {
+		if source, err := strconv.QuotedPrefix(header); err == nil {
+			target := strings.TrimPrefix(header[len(source):], " ")
+			return strings.TrimPrefix(decodeGitDiffPath(target), "b/")
+		}
+	}
+	if strings.HasPrefix(header, "a/") {
+		// Unquoted paths can themselves contain the separator " b/".
+		// For an unchanged filename, the two paths have equal length and content.
+		mid := len(header) / 2
+		if mid >= 2 && strings.HasPrefix(header[mid:], " b/") && header[2:mid] == header[mid+3:] {
+			return header[mid+3:]
+		}
+	}
+	if _, target, ok := strings.Cut(header, " b/"); ok {
+		return target
+	}
+	if _, target, ok := strings.Cut(header, " \"b/"); ok {
+		return decodeGitDiffPath("\"" + target)
+	}
+	if idx := strings.LastIndexByte(header, ' '); idx != -1 {
+		return strings.TrimPrefix(decodeGitDiffPath(header[idx+1:]), "b/")
+	}
+	return ""
+}
+
+func decodeGitDiffPath(file string) string {
+	if strings.HasPrefix(file, "\"") {
+		if decoded, err := strconv.Unquote(file); err == nil {
+			return decoded
+		}
+	}
+	return file
 }
 
 // GetCommitLog returns the list of commits between base and head.

@@ -76,6 +76,34 @@ index 1234567..89abcdef 100644
 	}
 }
 
+func TestParseUnifiedDiff_PreservesSignificantPathCharacters(t *testing.T) {
+	rawDiff := `diff --git "a/pkg\\app.go" "b/pkg\\app.go"
+--- "a/pkg\\app.go"
++++ "b/pkg\\app.go"
+@@ -1 +1 @@
+-old
++new
+diff --git a/ config.go b/ config.go
+--- a/ config.go
++++ b/ config.go
+@@ -1 +1 @@
+-old
++new
+` + "diff --git a/ leading.go b/renamed.go \n" + `similarity index 100%
+rename from  leading.go
+` + "rename to renamed.go \n"
+	files, err := ParseUnifiedDiff(rawDiff, true)
+	if err != nil || len(files) != 3 {
+		t.Fatalf("expected three changes, got %+v with error %v", files, err)
+	}
+	if files[0].Path != `pkg\app.go` || files[1].Path != " config.go" {
+		t.Errorf("paths lost significant characters: %q, %q", files[0].Path, files[1].Path)
+	}
+	if files[2].OldPath != " leading.go" || files[2].Path != "renamed.go " {
+		t.Errorf("rename paths lost whitespace: %q -> %q", files[2].OldPath, files[2].Path)
+	}
+}
+
 func TestParseUnifiedDiff_LongLine(t *testing.T) {
 	// Generate a line exceeding 64KB (e.g. 70KB)
 	longLine := make([]byte, 70*1024)
@@ -193,24 +221,29 @@ func TestGitRunner_GetStagedDiff(t *testing.T) {
 	}
 
 	// Create and stage a test file
-	filePath := filepath.Join(tempDir, "test.go")
+	mustRunGit(t, runner, "config", "diff.relative", "true")
+	subdir := filepath.Join(tempDir, "pkg")
+	if err := os.Mkdir(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(subdir, "test.go")
 	if err := os.WriteFile(filePath, []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
-	if _, err := runner.runCmd("add", "test.go"); err != nil {
+	if _, err := runner.runCmd("add", "pkg/test.go"); err != nil {
 		t.Fatalf("git add failed: %v", err)
 	}
 
 	// Verify staged diff
-	staged, err = runner.GetStagedDiff(false)
+	staged, err = NewGitRunner(subdir).GetStagedDiff(false)
 	if err != nil {
 		t.Fatalf("GetStagedDiff failed: %v", err)
 	}
 	if len(staged) != 1 {
 		t.Fatalf("expected 1 staged file, got %d", len(staged))
 	}
-	if staged[0].Path != "test.go" {
-		t.Errorf("expected path 'test.go', got %s", staged[0].Path)
+	if staged[0].Path != "pkg/test.go" {
+		t.Errorf("expected path 'pkg/test.go', got %s", staged[0].Path)
 	}
 	if staged[0].Additions != 3 {
 		t.Errorf("expected 3 additions, got %d", staged[0].Additions)
@@ -253,15 +286,20 @@ func TestGitRunner_GetDiff_CustomBaseBranch(t *testing.T) {
 	mustRunGit(t, runner, "checkout", "-b", "feat/payment")
 
 	// Make changes on feat/payment
-	fileB := filepath.Join(tempDir, "payment.go")
+	mustRunGit(t, runner, "config", "diff.relative", "true")
+	subdir := filepath.Join(tempDir, "pkg")
+	if err := os.Mkdir(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	fileB := filepath.Join(subdir, "payment.go")
 	if err := os.WriteFile(fileB, []byte("package payment\n\nfunc Pay() bool { return true }\n"), 0644); err != nil {
 		t.Fatalf("failed to write fileB: %v", err)
 	}
-	mustRunGit(t, runner, "add", "payment.go")
+	mustRunGit(t, runner, "add", "pkg/payment.go")
 	mustRunGit(t, runner, "commit", "-m", "feat: add payment")
 
 	// Test GetDiff against staging
-	changes, err := runner.GetDiff("staging", "feat/payment", false)
+	changes, err := NewGitRunner(subdir).GetDiff("staging", "feat/payment", false)
 	if err != nil {
 		t.Fatalf("GetDiff(staging, feat/payment) failed: %v", err)
 	}
@@ -269,8 +307,8 @@ func TestGitRunner_GetDiff_CustomBaseBranch(t *testing.T) {
 	if len(changes) != 1 {
 		t.Fatalf("expected 1 file change, got %d", len(changes))
 	}
-	if changes[0].Path != "payment.go" {
-		t.Errorf("expected changed path 'payment.go', got %s", changes[0].Path)
+	if changes[0].Path != "pkg/payment.go" {
+		t.Errorf("expected changed path 'pkg/payment.go', got %s", changes[0].Path)
 	}
 	if changes[0].Additions != 3 {
 		t.Errorf("expected 3 additions, got %d", changes[0].Additions)
@@ -386,18 +424,27 @@ func TestGitRunner_GetWorkingTreeDiff(t *testing.T) {
 	mustRunGit(t, runner, "config", "user.name", "Test User")
 
 	// Case 1: Unborn HEAD (staged file before first commit)
-	fileA := filepath.Join(tempDir, "initial.go")
+	mustRunGit(t, runner, "config", "diff.relative", "true")
+	subdir := filepath.Join(tempDir, "pkg")
+	if err := os.Mkdir(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	fileA := filepath.Join(subdir, "initial.go")
 	if err := os.WriteFile(fileA, []byte("package main\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	mustRunGit(t, runner, "add", "initial.go")
+	mustRunGit(t, runner, "add", "pkg/initial.go")
 
-	unbornChanges, err := runner.GetWorkingTreeDiff(false)
+	unbornChanges, err := NewGitRunner(subdir).GetWorkingTreeDiff(false)
 	if err != nil {
 		t.Fatalf("GetWorkingTreeDiff on unborn HEAD failed: %v", err)
 	}
-	if len(unbornChanges) != 1 || unbornChanges[0].Path != "initial.go" {
+	if len(unbornChanges) != 1 || unbornChanges[0].Path != "pkg/initial.go" {
 		t.Fatalf("expected 1 file on unborn HEAD, got: %+v", unbornChanges)
+	}
+
+	if got := unbornChanges[0].DiffHunk; got != "@@ -0,0 +1 @@\n+package main\n" {
+		t.Errorf("unexpected staged hunk: %q", got)
 	}
 
 	// Commit initial.go, then make an unstaged modification
@@ -406,11 +453,11 @@ func TestGitRunner_GetWorkingTreeDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changes, err := runner.GetWorkingTreeDiff(false)
+	changes, err := NewGitRunner(subdir).GetWorkingTreeDiff(false)
 	if err != nil {
 		t.Fatalf("GetWorkingTreeDiff failed: %v", err)
 	}
-	if len(changes) != 1 || changes[0].Path != "initial.go" {
+	if len(changes) != 1 || changes[0].Path != "pkg/initial.go" {
 		t.Fatalf("expected unstaged modification in initial.go, got: %+v", changes)
 	}
 }

@@ -47,7 +47,9 @@ type ghViewResponse struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	BaseRefName string `json:"baseRefName"`
+	BaseRefOid  string `json:"baseRefOid"`
 	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
 	URL         string `json:"url"`
 	CreatedAt   string `json:"createdAt"`
 }
@@ -60,7 +62,7 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 	}
 
 	// 1. Fetch metadata JSON via `gh pr view`
-	args := []string{"pr", "view", prOrBranch, "--json", "number,title,body,author,baseRefName,headRefName,url,createdAt"}
+	args := []string{"pr", "view", prOrBranch, "--json", "number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,url,createdAt"}
 	cmd := exec.Command("gh", args...)
 	if repoPath != "" {
 		cmd.Dir = repoPath
@@ -92,8 +94,13 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 		Author:      resp.Author.Login,
 		BaseBranch:  resp.BaseRefName,
 		HeadBranch:  resp.HeadRefName,
+		BaseCommit:  resp.BaseRefOid,
+		HeadCommit:  resp.HeadRefOid,
 		URL:         resp.URL,
 		CreatedAt:   createdAt,
+	}
+	if owner, repo, _, err := ParsePRURL(resp.URL); err == nil && owner != "" && repo != "" {
+		meta.Repo = fmt.Sprintf("%s/%s", owner, repo)
 	}
 
 	// 2. Fetch unified diff via `gh pr diff`
@@ -115,21 +122,27 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 
 // ParsePRURL extracts owner, repo, and PR number from a URL like https://github.com/owner/repo/pull/42
 func ParsePRURL(prURL string) (owner, repo string, number int, err error) {
+	_, owner, repo, number, err = ParsePRURLWithHost(prURL)
+	return owner, repo, number, err
+}
+
+// ParsePRURLWithHost extracts host, owner, repo, and PR number from a URL like https://github.com/owner/repo/pull/42
+func ParsePRURLWithHost(prURL string) (host, owner, repo string, number int, err error) {
 	u, err := url.Parse(prURL)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) >= 4 && parts[2] == "pull" {
 		num, err := strconv.Atoi(parts[3])
 		if err != nil {
-			return "", "", 0, fmt.Errorf("invalid PR number in URL: %s", parts[3])
+			return "", "", "", 0, fmt.Errorf("invalid PR number in URL: %s", parts[3])
 		}
-		return parts[0], parts[1], num, nil
+		return strings.ToLower(u.Hostname()), parts[0], parts[1], num, nil
 	}
 
-	return "", "", 0, fmt.Errorf("unsupported GitHub PR URL format: %s", prURL)
+	return "", "", "", 0, fmt.Errorf("unsupported GitHub PR URL format: %s", prURL)
 }
 
 // FetchPRViaAPI directly fetches PR metadata and diff via GitHub REST API (Zero-Clone Mode without gh CLI).
@@ -167,9 +180,11 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 		} `json:"user"`
 		Base struct {
 			Ref string `json:"ref"`
+			SHA string `json:"sha"`
 		} `json:"base"`
 		Head struct {
 			Ref string `json:"ref"`
+			SHA string `json:"sha"`
 		} `json:"head"`
 		HTMLURL   string `json:"html_url"`
 		CreatedAt string `json:"created_at"`
@@ -187,6 +202,8 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 		Author:      prData.User.Login,
 		BaseBranch:  prData.Base.Ref,
 		HeadBranch:  prData.Head.Ref,
+		BaseCommit:  prData.Base.SHA,
+		HeadCommit:  prData.Head.SHA,
 		Repo:        fmt.Sprintf("%s/%s", owner, repo),
 		URL:         prData.HTMLURL,
 		CreatedAt:   createdAt,
@@ -221,18 +238,22 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 	return meta, string(diffBytes), nil
 }
 
-// ParseRepoFromRemoteURL extracts owner and repo from an SSH or HTTPS git remote URL.
-func ParseRepoFromRemoteURL(remoteURL string) (owner, repo string, err error) {
+// ParseRemoteHostAndSlug extracts lowercase host, owner, and repo from an SSH or HTTPS git remote URL.
+func ParseRemoteHostAndSlug(remoteURL string) (host, owner, repo string, err error) {
 	trimmed := strings.TrimSpace(remoteURL)
 	trimmed = strings.TrimSuffix(trimmed, ".git")
 
-	// SSH style: git@github.com:owner/repo
+	// SSH style: git@github.com:owner/repo or user@gitlab.example.com:group/repo
 	if strings.Contains(trimmed, ":") && !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") && !strings.HasPrefix(trimmed, "ssh://") {
 		parts := strings.SplitN(trimmed, ":", 2)
 		if len(parts) == 2 {
+			hostPart := parts[0]
+			if atIdx := strings.Index(hostPart, "@"); atIdx != -1 {
+				hostPart = hostPart[atIdx+1:]
+			}
 			slugParts := strings.Split(parts[1], "/")
-			if len(slugParts) == 2 && slugParts[0] != "" && slugParts[1] != "" {
-				return slugParts[0], slugParts[1], nil
+			if len(slugParts) >= 2 && slugParts[len(slugParts)-2] != "" && slugParts[len(slugParts)-1] != "" {
+				return strings.ToLower(hostPart), slugParts[len(slugParts)-2], slugParts[len(slugParts)-1], nil
 			}
 		}
 	}
@@ -240,14 +261,20 @@ func ParseRepoFromRemoteURL(remoteURL string) (owner, repo string, err error) {
 	// URL style: https://github.com/owner/repo or ssh://git@github.com/owner/repo
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) >= 2 {
-		return parts[len(parts)-2], parts[len(parts)-1], nil
+		return strings.ToLower(u.Hostname()), parts[len(parts)-2], parts[len(parts)-1], nil
 	}
 
-	return "", "", fmt.Errorf("cannot parse owner and repo from remote URL: %s", remoteURL)
+	return "", "", "", fmt.Errorf("cannot parse owner and repo from remote URL: %s", remoteURL)
+}
+
+// ParseRepoFromRemoteURL extracts owner and repo from an SSH or HTTPS git remote URL.
+func ParseRepoFromRemoteURL(remoteURL string) (owner, repo string, err error) {
+	_, owner, repo, err = ParseRemoteHostAndSlug(remoteURL)
+	return owner, repo, err
 }
 
 // ResolveRepoAndPR extracts owner, repo, and PR number from a PR URL or integer string,

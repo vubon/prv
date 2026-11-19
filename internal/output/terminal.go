@@ -38,6 +38,9 @@ func PrintBundleSummary(ctx *models.PRContext) {
 	if len(ctx.CustomRules) > 0 {
 		fmt.Printf("   %sStandards:%s   %d custom rules active (.prv.yaml)\n", colorBold, colorReset, len(ctx.CustomRules))
 	}
+	if len(ctx.ForbiddenRules) > 0 || len(ctx.MandatedRules) > 0 {
+		fmt.Printf("   %sInvariants:%s  %d forbidden / %d mandated (.prv.yaml)\n", colorBold, colorReset, len(ctx.ForbiddenRules), len(ctx.MandatedRules))
+	}
 	if ctx.ArchitectureDiagram != "" {
 		fmt.Printf("   %sDiagram:%s     %s🗺️ Mermaid component graph generated%s\n", colorBold, colorReset, colorCyan, colorReset)
 	}

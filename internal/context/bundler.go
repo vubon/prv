@@ -33,25 +33,21 @@ func NewBundler(repoPath string) *Bundler {
 
 // PrepareBundle gathers all PR metadata, diffs, and filters noise into a structured PRContext.
 func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, error) {
-	cfg, err := config.LoadConfig(opts.RepoPath, opts.ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("error loading .prv.yaml: %w", err)
-	}
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
-
-	// If explicit context files (-c) were provided, validate and load them upfront (fail-fast)
-	var userContextDocs []models.UserContextDoc
-	if len(opts.ContextFiles) > 0 {
-		userContextDocs, err = LoadContextFiles(opts, cfg)
+	var explicitCfg *config.Config
+	if opts.ConfigPath != "" {
+		loaded, err := config.LoadConfig(opts.RepoPath, opts.ConfigPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error loading explicit .prv.yaml: %w", err)
 		}
+		explicitCfg = loaded
 	}
 
 	// Case 1: Remote GitHub PR URL or Number (Zero-Clone Policy)
 	if opts.PRIdentifier != "" {
+		if opts.BaseBranch != "" {
+			return nil, fmt.Errorf("cannot specify both --pr and --base (remote PR bundles use the PR's target base on GitHub)")
+		}
+
 		var meta *models.PRMetadata
 		var rawDiff string
 		var err error
@@ -84,39 +80,44 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			return nil, fmt.Errorf("failed to parse PR diff: %w", parseErr)
 		}
 
-		// In zero-clone mode, if no explicit --config was provided and the local directory
-		// is not a clone of the target PR repository, use default configuration to avoid
-		// leaking unrelated local rules into a foreign PR review.
-		effectiveCfg := *cfg
-		isForeignRepo := meta.Repo != "" && !b.isLocalRepoMatch(meta.Repo)
-		if opts.ConfigPath == "" && isForeignRepo {
-			effectiveCfg = *config.DefaultConfig()
-		}
-		if opts.MaxDiffLines > 0 {
-			effectiveCfg.Review.MaxDiffLines = opts.MaxDiffLines
+		// Effective config resolution:
+		// Require confirmed repository identity match before using local repo rules
+		var effectiveCfg *config.Config
+		var activeConfigPaths []string
+		isLocalMatch := b.isLocalRepoMatchWithMeta(meta)
+		if explicitCfg != nil {
+			effectiveCfg = explicitCfg
+			activeConfigPaths = b.explicitConfigPaths(opts.ConfigPath)
+		} else if isLocalMatch {
+			targetBase := meta.BaseCommit
+			if targetBase == "" {
+				targetBase = meta.BaseBranch
+			}
+			var cfgErr error
+			effectiveCfg, activeConfigPaths, cfgErr = b.resolveBaseConfig(targetBase, explicitCfg, opts)
+			if cfgErr != nil {
+				return nil, cfgErr
+			}
+		} else {
+			effectiveCfg = config.DefaultConfig()
 		}
 
-		// Auto-discover local context files only when reviewing a matching repository.
-		// Populate opts.Branch from meta.HeadBranch so auto-discovery can fall back to
-		// <head-branch>.md when <pr-id>.md is not present.
-		effectiveUserContext := userContextDocs
-		if !isForeignRepo && len(opts.ContextFiles) == 0 {
+		effectiveCfgCopy := applyCLIOptions(effectiveCfg, opts)
+
+		var userContextDocs []models.UserContextDoc
+		if isLocalMatch || len(opts.ContextFiles) > 0 {
 			optsWithBranch := opts
 			if optsWithBranch.Branch == "" && meta.HeadBranch != "" {
 				optsWithBranch.Branch = meta.HeadBranch
 			}
-			effectiveUserContext, err = LoadContextFiles(optsWithBranch, &effectiveCfg)
-			if err != nil {
-				return nil, err
+			var ctxErr error
+			userContextDocs, ctxErr = LoadContextFiles(optsWithBranch, &effectiveCfgCopy)
+			if ctxErr != nil {
+				return nil, ctxErr
 			}
 		}
 
-		return b.buildContext(meta, fileChanges, effectiveUserContext, &effectiveCfg), nil
-	}
-
-	effectiveCfg := *cfg
-	if opts.MaxDiffLines > 0 {
-		effectiveCfg.Review.MaxDiffLines = opts.MaxDiffLines
+		return b.buildContext(meta, fileChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
 	}
 
 	// Case 2: Staged Changes (--staged)
@@ -125,18 +126,23 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			return nil, fmt.Errorf("not a git repository: cannot inspect staged changes in %s", opts.RepoPath)
 		}
 
+		effectiveCfg, activeConfigPaths, cfgErr := b.resolveBaseConfig("HEAD", explicitCfg, opts)
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		effectiveCfgCopy := applyCLIOptions(effectiveCfg, opts)
+
 		currentBranch, err := b.gitRunner.GetCurrentBranch()
 		if err != nil || currentBranch == "" {
 			currentBranch = "HEAD"
 		}
-		if opts.Branch == "" && currentBranch != "HEAD" {
-			opts.Branch = currentBranch
+		optsWithBranch := opts
+		if optsWithBranch.Branch == "" && currentBranch != "HEAD" {
+			optsWithBranch.Branch = currentBranch
 		}
-		if len(opts.ContextFiles) == 0 {
-			userContextDocs, err = LoadContextFiles(opts, &effectiveCfg)
-			if err != nil {
-				return nil, err
-			}
+		userContextDocs, err := LoadContextFiles(optsWithBranch, &effectiveCfgCopy)
+		if err != nil {
+			return nil, err
 		}
 
 		stagedChanges, diffErr := b.gitRunner.GetStagedDiff(opts.IncludeLocks)
@@ -156,7 +162,7 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			CreatedAt:   time.Now(),
 		}
 
-		return b.buildContext(meta, stagedChanges, userContextDocs, &effectiveCfg), nil
+		return b.buildContext(meta, stagedChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
 	}
 
 	// Case 2b: Working Tree Uncommitted Changes (--dirty)
@@ -165,18 +171,23 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			return nil, fmt.Errorf("not a git repository: cannot inspect working tree changes in %s", opts.RepoPath)
 		}
 
+		effectiveCfg, activeConfigPaths, cfgErr := b.resolveBaseConfig("HEAD", explicitCfg, opts)
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		effectiveCfgCopy := applyCLIOptions(effectiveCfg, opts)
+
 		currentBranch, err := b.gitRunner.GetCurrentBranch()
 		if err != nil || currentBranch == "" {
 			currentBranch = "HEAD"
 		}
-		if opts.Branch == "" && currentBranch != "HEAD" {
-			opts.Branch = currentBranch
+		optsWithBranch := opts
+		if optsWithBranch.Branch == "" && currentBranch != "HEAD" {
+			optsWithBranch.Branch = currentBranch
 		}
-		if len(opts.ContextFiles) == 0 {
-			userContextDocs, err = LoadContextFiles(opts, &effectiveCfg)
-			if err != nil {
-				return nil, err
-			}
+		userContextDocs, err := LoadContextFiles(optsWithBranch, &effectiveCfgCopy)
+		if err != nil {
+			return nil, err
 		}
 
 		workingChanges, diffErr := b.gitRunner.GetWorkingTreeDiff(opts.IncludeLocks)
@@ -196,7 +207,7 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			CreatedAt:   time.Now(),
 		}
 
-		return b.buildContext(meta, workingChanges, userContextDocs, &effectiveCfg), nil
+		return b.buildContext(meta, workingChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
 	}
 
 	// Case 3: Local Git Repository Branch
@@ -206,6 +217,7 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 
 	headBranch := opts.Branch
 	if headBranch == "" {
+		var err error
 		headBranch, err = b.gitRunner.GetCurrentBranch()
 		if err != nil {
 			return nil, fmt.Errorf("failed to detect current branch: %w", err)
@@ -213,91 +225,150 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		opts.Branch = headBranch
 	}
 
-	if len(opts.ContextFiles) == 0 {
-		userContextDocs, err = LoadContextFiles(opts, &effectiveCfg)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	baseBranch := opts.BaseBranch
-	if baseBranch == "" && cfg != nil && cfg.Review.DefaultBaseBranch != "" {
-		if err := git.ValidateRefName(cfg.Review.DefaultBaseBranch); err != nil {
-			return nil, fmt.Errorf("invalid default_base_branch in configuration: %w", err)
-		}
-		baseBranch = cfg.Review.DefaultBaseBranch
-	}
-	if baseBranch == "" {
-		baseBranch = b.gitRunner.GetDefaultBaseBranch()
-	}
-
+	// 1. Determine diff source and target base branch first (Finding 3)
 	var meta *models.PRMetadata
 	var fileChanges []models.FileChange
+	var targetBaseBranch string
 
-	// If user explicitly specified a custom base branch via CLI options,
-	// compute diff locally against that explicit base
 	if opts.BaseBranch != "" {
+		targetBaseBranch = opts.BaseBranch
 		ghMeta, _, _ := b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
-		if ghMeta != nil {
+		if ghMeta != nil && b.isLocalRepoMatchWithMeta(ghMeta) {
 			meta = ghMeta
-			meta.BaseBranch = baseBranch
+			meta.BaseBranch = targetBaseBranch
+			if ghMeta.BaseBranch != targetBaseBranch {
+				meta.BaseCommit = ""
+			}
 		}
+	} else {
+		// Try to enrich with GitHub PR description & diff if gh CLI is available and repo matches
+		ghMeta, ghDiff, _ := b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
+		if ghMeta != nil && b.isLocalRepoMatchWithMeta(ghMeta) {
+			meta = ghMeta
+			if ghDiff != "" {
+				parsedChanges, parseErr := git.ParseUnifiedDiff(ghDiff, opts.IncludeLocks)
+				if parseErr == nil {
+					fileChanges = parsedChanges
+				}
+			}
+			if meta.BaseBranch != "" {
+				targetBaseBranch = meta.BaseBranch
+			}
+		}
+		if targetBaseBranch == "" {
+			var baseErr error
+			targetBaseBranch, baseErr = b.resolveTargetBaseBranch(opts, explicitCfg, headBranch)
+			if baseErr != nil {
+				return nil, baseErr
+			}
+		}
+	}
 
-		localChanges, diffErr := b.gitRunner.GetDiff(baseBranch, headBranch, opts.IncludeLocks)
+	// 2. Resolve base revision once for both config and diff (Findings P2.1, P2.2 in review-02.md)
+	var commitSHA string
+	lookupBase := targetBaseBranch
+	if opts.BaseBranch == "" && meta != nil && meta.BaseCommit != "" {
+		lookupBase = meta.BaseCommit
+	}
+
+	if explicitCfg == nil || len(fileChanges) == 0 {
+		_, cSHA, revErr := b.gitRunner.ResolveBaseRevision(lookupBase)
+		if revErr != nil {
+			return nil, fmt.Errorf("failed to resolve base branch %q: %w", lookupBase, revErr)
+		}
+		commitSHA = cSHA
+		if meta != nil {
+			meta.BaseCommit = commitSHA
+		}
+	}
+
+	var activeConfigPaths []string
+	var effectiveCfg *config.Config
+
+	if explicitCfg != nil {
+		effectiveCfg = explicitCfg
+		activeConfigPaths = b.explicitConfigPaths(opts.ConfigPath)
+	} else {
+		var cfgErr error
+		effectiveCfg, activeConfigPaths, cfgErr = b.resolveBaseConfig(commitSHA, explicitCfg, opts)
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+	}
+	effectiveCfgCopy := applyCLIOptions(effectiveCfg, opts)
+
+	// 3. Load context files once with effectiveCfgCopy (Finding 3, Finding 7)
+	userContextDocs, err := LoadContextFiles(opts, &effectiveCfgCopy)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Compute local diff if not already populated from GitHub PR (Finding 1)
+	var headCommitSHA string
+	if len(fileChanges) == 0 {
+		diffHead := headBranch
+		if resolvedHead, headErr := b.gitRunner.ResolveHeadCommit(headBranch); headErr == nil && resolvedHead != "" {
+			headCommitSHA = resolvedHead
+			diffHead = resolvedHead
+		}
+		localChanges, diffErr := b.gitRunner.GetDiff(commitSHA, diffHead, opts.IncludeLocks)
 		if diffErr != nil {
-			return nil, fmt.Errorf("failed to get local diff against base %s: %w", baseBranch, diffErr)
+			return nil, fmt.Errorf("failed to get local diff against base %s: %w", targetBaseBranch, diffErr)
 		}
 		fileChanges = localChanges
-	} else {
-		// Try to enrich with GitHub PR description & diff if gh CLI is available
-		ghMeta, ghDiff, _ := b.ghClient.FetchPRViaCLI(headBranch, opts.RepoPath)
-		if ghMeta != nil && ghDiff != "" {
-			meta = ghMeta
-			parsedChanges, parseErr := git.ParseUnifiedDiff(ghDiff, opts.IncludeLocks)
-			if parseErr == nil {
-				fileChanges = parsedChanges
-			}
-		}
-
-		// Fallback to local git diff if GitHub PR was not found or had empty diff
-		if len(fileChanges) == 0 && meta == nil {
-			localChanges, diffErr := b.gitRunner.GetDiff(baseBranch, headBranch, opts.IncludeLocks)
-			if diffErr != nil {
-				return nil, fmt.Errorf("failed to get local diff: %w", diffErr)
-			}
-			fileChanges = localChanges
+		if meta != nil && headCommitSHA != "" {
+			meta.HeadCommit = headCommitSHA
 		}
 	}
 
 	if meta == nil {
 		desc := "(No PR description found on GitHub — reviewing local branch diff)"
-		if headBranch == baseBranch {
-			desc += fmt.Sprintf("\n\nNote: Head branch '%s' is identical to base branch '%s' (0 changes).", headBranch, baseBranch)
+		if headBranch == targetBaseBranch {
+			desc += fmt.Sprintf("\n\nNote: Head branch '%s' is identical to base branch '%s' (0 changes).", headBranch, targetBaseBranch)
 		}
 		title := fmt.Sprintf("Branch Review: %s", headBranch)
-		if headBranch != baseBranch {
-			title = fmt.Sprintf("Branch Review: %s (against %s)", headBranch, baseBranch)
+		if headBranch != targetBaseBranch {
+			title = fmt.Sprintf("Branch Review: %s (against %s)", headBranch, targetBaseBranch)
 		}
 		meta = &models.PRMetadata{
 			Title:       title,
 			Description: desc,
-			BaseBranch:  baseBranch,
+			BaseBranch:  targetBaseBranch,
+			BaseCommit:  commitSHA,
 			HeadBranch:  headBranch,
+			HeadCommit:  headCommitSHA,
 			CreatedAt:   time.Now(),
 		}
 	}
 
-	return b.buildContext(meta, fileChanges, userContextDocs, &effectiveCfg), nil
+	return b.buildContext(meta, fileChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
 }
 
 // buildContext computes stats, applies custom filters, flags sensitive files, and builds PRContext.
-func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange, userContext []models.UserContextDoc, cfg *config.Config) *models.PRContext {
+func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange, userContext []models.UserContextDoc, cfg *config.Config, activeConfigPaths ...string) *models.PRContext {
 	ctx := &models.PRContext{
-		Metadata:    *meta,
-		BundledAt:   time.Now(),
-		Persona:     cfg.Review.Persona,
-		CustomRules: cfg.Review.CustomRules,
-		UserContext: userContext,
+		Metadata:       *meta,
+		BundledAt:      time.Now(),
+		Persona:        cfg.Review.Persona,
+		CustomRules:    cfg.Review.CustomRules,
+		ForbiddenRules: cfg.Review.Rules.Forbidden,
+		MandatedRules:  cfg.Review.Rules.Mandated,
+		RulePolicy:     buildInvariantRulePolicy(cfg.Review.Rules.Forbidden, cfg.Review.Rules.Mandated),
+		UserContext:    userContext,
+	}
+
+	// Detect modified or renamed configuration files across ALL changed files before filtering
+	for _, f := range files {
+		normPath := strings.TrimPrefix(filepath.ToSlash(f.Path), "./")
+		normOld := strings.TrimPrefix(filepath.ToSlash(f.OldPath), "./")
+		if isConfigPathMatch(normPath, activeConfigPaths...) {
+			ctx.ModifiedConfigFile = normPath
+			break
+		}
+		if isConfigPathMatch(normOld, activeConfigPaths...) {
+			ctx.ModifiedConfigFile = normOld
+			break
+		}
 	}
 
 	stats := models.SummaryStats{
@@ -381,10 +452,46 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		sb.WriteString("\n")
 	}
 
-	if len(ctx.CustomRules) > 0 {
+	if ctx.ModifiedConfigFile != "" {
+		sb.WriteString("> [!CAUTION]\n")
+		fmt.Fprintf(&sb, "> Configuration file `%s` was modified in this change. Review config edits carefully to ensure team rules were not weakened (base-revision rules apply by default unless `--config` is passed).\n\n", ctx.ModifiedConfigFile)
+	}
+
+	if len(ctx.CustomRules) > 0 || len(ctx.ForbiddenRules) > 0 || len(ctx.MandatedRules) > 0 {
 		sb.WriteString("## 📋 Team Engineering Standards & Custom Rules (`.prv.yaml`)\n\n")
 		for _, r := range ctx.CustomRules {
 			fmt.Fprintf(&sb, "- %s\n", r)
+		}
+		if len(ctx.CustomRules) > 0 && (len(ctx.ForbiddenRules) > 0 || len(ctx.MandatedRules) > 0) {
+			sb.WriteString("\n")
+		}
+		if len(ctx.ForbiddenRules) > 0 {
+			severity := models.SeverityBlocking
+			evidenceReq := models.ForbiddenEvidenceRequirement
+			if ctx.RulePolicy != nil && ctx.RulePolicy.Forbidden != nil {
+				severity = ctx.RulePolicy.Forbidden.Severity
+				evidenceReq = ctx.RulePolicy.Forbidden.EvidenceRequirement
+			}
+			sb.WriteString("### 🚫 Forbidden Anti-Patterns\n\n")
+			sb.WriteString("> [!CAUTION]\n")
+			fmt.Fprintf(&sb, "> A violation is a `%s` finding. %s\n\n", severity, evidenceReq)
+			for _, r := range ctx.ForbiddenRules {
+				fmt.Fprintf(&sb, "- %s\n", r)
+			}
+			if len(ctx.MandatedRules) > 0 {
+				sb.WriteString("\n")
+			}
+		}
+		if len(ctx.MandatedRules) > 0 {
+			severity := models.SeverityMajor
+			if ctx.RulePolicy != nil && ctx.RulePolicy.Mandated != nil {
+				severity = ctx.RulePolicy.Mandated.Severity
+			}
+			sb.WriteString("### ✅ Mandated Conventions\n\n")
+			fmt.Fprintf(&sb, "> A violation is a `%s` issue.\n\n", severity)
+			for _, r := range ctx.MandatedRules {
+				fmt.Fprintf(&sb, "- %s\n", r)
+			}
 		}
 		sb.WriteString("\n")
 	}
@@ -450,16 +557,79 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 	return sb.String()
 }
 
-// isLocalRepoMatch checks if local repository origin matches the remote PR target repository.
-func (b *Bundler) isLocalRepoMatch(targetRepo string) bool {
-	if !b.gitRunner.IsGitRepo() {
+func isConfigFileName(p string) bool {
+	norm := strings.TrimPrefix(filepath.ToSlash(p), "./")
+	base := filepath.Base(norm)
+	return base == ".prv.yaml" || base == ".prv.yml"
+}
+
+func toRepoRelative(prefix, path string) string {
+	clean := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(path)), "./")
+	if clean == "" {
+		return ""
+	}
+	if prefix == "" {
+		return clean
+	}
+	if strings.HasPrefix(clean, prefix+"/") || clean == prefix {
+		return clean
+	}
+	return strings.TrimPrefix(filepath.ToSlash(filepath.Clean(filepath.Join(prefix, clean))), "./")
+}
+
+func isConfigPathMatch(p string, extraPaths ...string) bool {
+	if p == "" {
+		return false
+	}
+	norm := strings.TrimPrefix(filepath.ToSlash(p), "./")
+	if isConfigFileName(norm) {
+		return true
+	}
+	for _, ep := range extraPaths {
+		if ep == "" {
+			continue
+		}
+		normExtra := strings.TrimPrefix(filepath.ToSlash(ep), "./")
+		if norm == normExtra {
+			return true
+		}
+	}
+	return false
+}
+
+// isLocalRepoMatchWithMeta checks if local repository origin matches the remote PR target repository and host.
+func (b *Bundler) isLocalRepoMatchWithMeta(meta *models.PRMetadata) bool {
+	if meta == nil || !b.gitRunner.IsGitRepo() {
 		return false
 	}
 	url, err := b.gitRunner.GetRemoteURL()
-	if err != nil {
+	if err != nil || url == "" {
 		return false
 	}
-	return strings.Contains(strings.ToLower(url), strings.ToLower(targetRepo))
+	localHost, localOwner, localRepo, parseErr := git.ParseRemoteHostAndSlug(url)
+	if parseErr == nil && meta.URL != "" {
+		prHost, prOwner, prRepo, _, prErr := git.ParsePRURLWithHost(meta.URL)
+		if prErr == nil {
+			return strings.EqualFold(localHost, prHost) &&
+				strings.EqualFold(localOwner, prOwner) &&
+				strings.EqualFold(localRepo, prRepo)
+		}
+	}
+	target := meta.Repo
+	if target == "" && meta.URL != "" {
+		_, o, r, _, prErr := git.ParsePRURLWithHost(meta.URL)
+		if prErr == nil {
+			target = fmt.Sprintf("%s/%s", o, r)
+		}
+	}
+	if target == "" {
+		return false
+	}
+	if parseErr == nil {
+		localSlug := fmt.Sprintf("%s/%s", localOwner, localRepo)
+		return strings.EqualFold(localSlug, strings.TrimSpace(target))
+	}
+	return strings.Contains(strings.ToLower(url), strings.ToLower(target))
 }
 
 func isContextFileInDiff(sourcePath string, files []models.FileChange) bool {
@@ -471,4 +641,192 @@ func isContextFileInDiff(sourcePath string, files []models.FileChange) bool {
 		}
 	}
 	return false
+}
+
+// resolveTargetBaseBranch determines the base branch for local branch reviews while preventing
+// uncommitted .prv.yaml edits from redirecting the base branch without an explicit --config or --base flag.
+func (b *Bundler) resolveTargetBaseBranch(opts models.BundleOptions, explicitCfg *config.Config, headBranch string) (string, error) {
+	if opts.BaseBranch != "" {
+		return opts.BaseBranch, nil
+	}
+	if opts.ConfigPath != "" && explicitCfg != nil && explicitCfg.Review.DefaultBaseBranch != "" {
+		if err := git.ValidateRefName(explicitCfg.Review.DefaultBaseBranch); err != nil {
+			return "", fmt.Errorf("invalid default_base_branch in configuration: %w", err)
+		}
+		return explicitCfg.Review.DefaultBaseBranch, nil
+	}
+	repoDefaultBase := b.gitRunner.GetDefaultBaseBranch()
+	if repoDefaultBase != "" {
+		if baseCfg, _, found, err := b.readConfigAtRef(repoDefaultBase); err == nil && found && baseCfg.Review.DefaultBaseBranch != "" {
+			if err := git.ValidateRefName(baseCfg.Review.DefaultBaseBranch); err != nil {
+				return "", fmt.Errorf("invalid default_base_branch in configuration: %w", err)
+			}
+			return baseCfg.Review.DefaultBaseBranch, nil
+		}
+	}
+	return repoDefaultBase, nil
+}
+
+func (b *Bundler) readConfigAtRef(baseRef string) (*config.Config, []string, bool, error) {
+	for _, candidate := range []string{".prv.yaml", ".prv.yml"} {
+		data, resolvedPath, traversed, found, err := b.gitRunner.ReadFileAtRefWithResolvedPath(baseRef, candidate)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to inspect %s at base revision %s: %w", candidate, baseRef, err)
+		}
+		if found {
+			baseCfg, parseErr := config.ParseConfigBytes(data, fmt.Sprintf("%s:%s", baseRef, resolvedPath))
+			if parseErr != nil {
+				return nil, traversed, true, parseErr
+			}
+			return baseCfg, traversed, true, nil
+		}
+	}
+	return nil, nil, false, nil
+}
+
+// explicitConfigPaths normalizes an explicit --config path (relative or absolute, including symlink targets)
+// into repository-relative paths so changes to the active config file in the diff trigger a caution warning.
+func (b *Bundler) explicitConfigPaths(configPath string) []string {
+	trimmed := strings.TrimSpace(configPath)
+	if trimmed == "" {
+		return nil
+	}
+	if !b.gitRunner.IsGitRepo() {
+		return []string{strings.TrimPrefix(filepath.ToSlash(filepath.Clean(trimmed)), "./")}
+	}
+
+	var paths []string
+	addRepoRel := func(rel string) {
+		clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(rel)), "./")
+		if clean == "" || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+			return
+		}
+		for _, existing := range paths {
+			if existing == clean {
+				return
+			}
+		}
+		paths = append(paths, clean)
+	}
+
+	repoRoot, _ := b.gitRunner.GetRepoRoot()
+	var realRepoRoot string
+	if repoRoot != "" {
+		if evalRoot, err := filepath.EvalSymlinks(repoRoot); err == nil && evalRoot != "" {
+			realRepoRoot = evalRoot
+		}
+	}
+
+	addAbsCandidate := func(absPath string) {
+		if absPath == "" {
+			return
+		}
+		for _, root := range []string{repoRoot, realRepoRoot} {
+			if root == "" {
+				continue
+			}
+			if rel, err := filepath.Rel(root, absPath); err == nil {
+				addRepoRel(rel)
+			}
+		}
+		if evalDir, err := filepath.EvalSymlinks(filepath.Dir(absPath)); err == nil && evalDir != "" {
+			leafAbs := filepath.Join(evalDir, filepath.Base(absPath))
+			for _, root := range []string{repoRoot, realRepoRoot} {
+				if root == "" {
+					continue
+				}
+				if rel, err := filepath.Rel(root, leafAbs); err == nil {
+					addRepoRel(rel)
+				}
+			}
+		}
+		if resolved, err := filepath.EvalSymlinks(absPath); err == nil && resolved != "" {
+			for _, root := range []string{repoRoot, realRepoRoot} {
+				if root == "" {
+					continue
+				}
+				if rel, err := filepath.Rel(root, resolved); err == nil {
+					addRepoRel(rel)
+				}
+			}
+		}
+	}
+
+	if filepath.IsAbs(trimmed) {
+		addAbsCandidate(filepath.Clean(trimmed))
+	} else {
+		if absCwd, err := filepath.Abs(trimmed); err == nil {
+			addAbsCandidate(absCwd)
+		}
+		if b.repoPath != "" {
+			if absRepo, err := filepath.Abs(filepath.Join(b.repoPath, trimmed)); err == nil {
+				addAbsCandidate(absRepo)
+			}
+		}
+		prefix := b.gitRunner.GetRepoPrefix()
+		addRepoRel(toRepoRelative(prefix, trimmed))
+	}
+
+	return paths
+}
+
+// resolveBaseConfig loads .prv.yaml/.prv.yml from baseRef when no explicit --config override was provided,
+// preventing a PR from weakening the rules used to review itself. When baseRef resolves to an existing
+// commit that has no .prv.yaml/.prv.yml, DefaultConfig() is returned so a PR adding .prv.yaml cannot
+// self-inject ignore_patterns or weaken defaults without --config.
+func (b *Bundler) resolveBaseConfig(baseRef string, explicitCfg *config.Config, opts models.BundleOptions) (*config.Config, []string, error) {
+	if explicitCfg != nil {
+		return explicitCfg, b.explicitConfigPaths(opts.ConfigPath), nil
+	}
+	if strings.TrimSpace(baseRef) == "" || !b.gitRunner.IsGitRepo() {
+		return config.DefaultConfig(), nil, nil
+	}
+	// Check for unborn HEAD in repositories without an initial commit (Finding P2.4: ignore uncommitted .prv.yaml)
+	if baseRef == "HEAD" && !b.gitRunner.RefExists("HEAD") {
+		return config.DefaultConfig(), nil, nil
+	}
+	// If baseRef is an exact commit ID and not yet available locally, try fetching it
+	if git.IsHexCommitID(baseRef) && !b.gitRunner.RefExists(baseRef) {
+		_ = b.gitRunner.FetchCommit(baseRef)
+	}
+	// Resolve base commit SHA first to ensure consistent ref resolution
+	_, commitSHA, revErr := b.gitRunner.ResolveBaseRevision(baseRef)
+	if revErr != nil {
+		return nil, nil, fmt.Errorf("cannot resolve base revision %q locally to load review rules (supply --config to specify review rules explicitly): %w", baseRef, revErr)
+	}
+	baseCfg, traversed, found, err := b.readConfigAtRef(commitSHA)
+	if err != nil {
+		return nil, nil, err
+	}
+	if found {
+		return baseCfg, traversed, nil
+	}
+	return config.DefaultConfig(), nil, nil
+}
+
+func applyCLIOptions(base *config.Config, opts models.BundleOptions) config.Config {
+	out := *base
+	if opts.MaxDiffLines > 0 {
+		out.Review.MaxDiffLines = opts.MaxDiffLines
+	}
+	return out
+}
+
+func buildInvariantRulePolicy(forbidden, mandated []string) *models.InvariantRulePolicy {
+	if len(forbidden) == 0 && len(mandated) == 0 {
+		return nil
+	}
+	policy := &models.InvariantRulePolicy{}
+	if len(forbidden) > 0 {
+		policy.Forbidden = &models.RuleEnforcement{
+			Severity:            models.SeverityBlocking,
+			EvidenceRequirement: models.ForbiddenEvidenceRequirement,
+		}
+	}
+	if len(mandated) > 0 {
+		policy.Mandated = &models.RuleEnforcement{
+			Severity: models.SeverityMajor,
+		}
+	}
+	return policy
 }

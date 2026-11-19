@@ -10,6 +10,8 @@ type PRMetadata struct {
 	Author      string    `json:"author,omitempty"`
 	BaseBranch  string    `json:"base_branch"`
 	HeadBranch  string    `json:"head_branch"`
+	BaseCommit  string    `json:"base_commit,omitempty"`
+	HeadCommit  string    `json:"head_commit,omitempty"`
 	Repo        string    `json:"repo,omitempty"`
 	URL         string    `json:"url,omitempty"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
@@ -35,19 +37,38 @@ type UserContextDoc struct {
 	Content    string `json:"content"`
 }
 
+// ForbiddenEvidenceRequirement is the shared evidence instruction for forbidden rule violations.
+const ForbiddenEvidenceRequirement = "Quote the added or deleted lines that introduced the violation, and explain how the resulting code violates the rule."
+
+// RuleEnforcement describes the verdict severity and evidence requirement for a rule tier.
+type RuleEnforcement struct {
+	Severity            string `json:"severity"`
+	EvidenceRequirement string `json:"evidence_requirement,omitempty"`
+}
+
+// InvariantRulePolicy describes the severity and evidence contracts for structured team rules.
+type InvariantRulePolicy struct {
+	Forbidden *RuleEnforcement `json:"forbidden,omitempty"`
+	Mandated  *RuleEnforcement `json:"mandated,omitempty"`
+}
+
 // PRContext is the complete bundle payload produced by prv bundle.
 type PRContext struct {
-	Metadata            PRMetadata        `json:"metadata"`
-	SummaryStats        SummaryStats      `json:"summary_stats"`
-	Files               []FileChange      `json:"files"`
-	FileWalkthroughs    []FileWalkthrough `json:"file_walkthroughs,omitempty"`
-	IgnoredFiles        []string          `json:"ignored_files,omitempty"`
-	SensitiveFiles      []string          `json:"sensitive_files,omitempty"`
-	CustomRules         []string          `json:"custom_rules,omitempty"`
-	Persona             string            `json:"persona,omitempty"`
-	ArchitectureDiagram string            `json:"architecture_diagram,omitempty"`
-	BundledAt           time.Time         `json:"bundled_at"`
-	UserContext         []UserContextDoc  `json:"user_context,omitempty"`
+	Metadata            PRMetadata           `json:"metadata"`
+	SummaryStats        SummaryStats         `json:"summary_stats"`
+	Files               []FileChange         `json:"files"`
+	FileWalkthroughs    []FileWalkthrough    `json:"file_walkthroughs,omitempty"`
+	IgnoredFiles        []string             `json:"ignored_files,omitempty"`
+	SensitiveFiles      []string             `json:"sensitive_files,omitempty"`
+	CustomRules         []string             `json:"custom_rules,omitempty"`
+	ForbiddenRules      []string             `json:"forbidden_rules,omitempty"`
+	MandatedRules       []string             `json:"mandated_rules,omitempty"`
+	RulePolicy          *InvariantRulePolicy `json:"rule_policy,omitempty"`
+	Persona             string               `json:"persona,omitempty"`
+	ArchitectureDiagram string               `json:"architecture_diagram,omitempty"`
+	ModifiedConfigFile  string               `json:"modified_config_file,omitempty"`
+	BundledAt           time.Time            `json:"bundled_at"`
+	UserContext         []UserContextDoc     `json:"user_context,omitempty"`
 }
 
 // SummaryStats contains aggregated diff metrics.

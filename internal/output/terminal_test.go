@@ -129,3 +129,32 @@ func TestPrintReviewSummary(t *testing.T) {
 		t.Error("expected file in review summary")
 	}
 }
+
+func TestPrintBundleSummary_InvariantRules(t *testing.T) {
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{
+			Title:      "Invariants PR",
+			HeadBranch: "feat/rules",
+			BaseBranch: "main",
+		},
+		ForbiddenRules: []string{"NEVER A", "NEVER B"},
+		MandatedRules:  []string{"ALWAYS C"},
+	}
+
+	out := captureStdout(func() {
+		PrintBundleSummary(ctx)
+	})
+	if !strings.Contains(out, "2 forbidden / 1 mandated") {
+		t.Errorf("expected invariant counts in terminal summary, got:\n%s", out)
+	}
+
+	emptyCtx := &models.PRContext{
+		Metadata: models.PRMetadata{Title: "Plain PR", HeadBranch: "feat/x", BaseBranch: "main"},
+	}
+	emptyOut := captureStdout(func() {
+		PrintBundleSummary(emptyCtx)
+	})
+	if strings.Contains(emptyOut, "Invariants:") {
+		t.Errorf("expected Invariants line omitted when counts are zero, got:\n%s", emptyOut)
+	}
+}

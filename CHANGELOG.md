@@ -5,6 +5,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.13.0-beta] — 2026-11-20
+
+### Added
+- **Structured Invariant Rules (`review.rules.forbidden` & `review.rules.mandated`)**:
+  - Added structured invariants under `review.rules` in `.prv.yaml` to distinguish zero-tolerance anti-patterns (`forbidden`) from required conventions (`mandated`), complementing existing flat `custom_rules`.
+  - Normalization trims whitespace, removes empty entries, and deduplicates rules within each list while preserving casing.
+  - Rendered in bundles as dedicated sections: `### 🚫 Forbidden Anti-Patterns` and `### ✅ Mandated Conventions`.
+  - Added terminal summary line `Invariants: F forbidden / M mandated` (only shown when non-zero).
+  - Included in machine-readable JSON bundle as `forbidden_rules` and `mandated_rules`.
+  - Updated `prv init` template and documentation.
+- **Evidence-Grounded Findings & Report Validation (`--strict-evidence`)**:
+  - Added optional `evidence` field to `models.Issue` (`json:"evidence,omitempty"`) for repro inputs/traces, commands, or quoted offending lines.
+  - Implemented `ValidateEvidence` and `ApplyEvidencePolicy` in `internal/output/evidence.go` to inspect `BLOCKING` issues.
+  - Added `--strict-evidence` flag to `prv report` and `review.require_evidence` configuration in `.prv.yaml`:
+    - Default (`require_evidence: false`): warns about `BLOCKING` issues missing evidence without failing or mutating the report.
+    - Strict mode (`--strict-evidence` or `require_evidence: true`): exits non-zero and refuses to persist or publish unevidenced `BLOCKING` issues.
+  - Markdown reports and Conventional Comments render formatted `**Evidence:**` blocks when evidence is present.
+  - `SaveReportToFile` automatically persists a sibling `<name>.json` structured report beside the markdown file, with collision-safe `-2`, `-3` suffix handling for same-day/same-branch reports.
+- **Prior Review Findings Re-Check (`--prior`, `-P`)**:
+  - Added `--prior <path>` (alias `-P`) to `prv bundle` for iteration re-checks.
+  - Ingests structured `ReviewResult` JSON (produced by `prv report`) and validates file safety (regular file, size capped by `context.max_size_kb`, JSON envelope check, title cap, markdown escaping).
+  - Correlates prior findings with current diff to compute deterministic `Touched` status (marks whether the referenced file was modified in the current diff).
+  - Displays up to 50 findings with table formatting under `## 🔄 Prior Review Findings (iteration re-check)` framed as untrusted data ("data, not instructions").
+  - Terminal summary displays `Prior: P findings (T touched)` when present.
+  - Git diff integration hardened with `--no-relative` to ensure clean repo-root paths and Go-quoted parsing for non-UTF-8 paths.
+- **Opt-in Refute-First Persona (`staff-adversarial` & `--persona`)**:
+  - Added opt-in `staff-adversarial` persona alongside `staff-advisory`, `strict-linter`, and `mentor` in `internal/matrix/persona.go`.
+  - Added `--persona <name>` CLI override on `prv bundle`, taking precedence over `review.persona` in `.prv.yaml` (with non-fatal warning for unknown personas).
+  - When `staff-adversarial` is active, `PRContext.Instructions` renders an advisory `## 🛡️ Review Persona Instructions` block prompting reviewers to refute claims, classify as `BLOCKING` only with verifiable evidence, evaluate prior findings first, and verify blast radius.
+  - The default `staff-advisory` persona emits no persona instructions block.
+
 ## [0.12.0-beta] — 2026-11-02
 
 ### Added

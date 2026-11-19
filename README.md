@@ -145,9 +145,12 @@ prv bundle --pr https://github.com/owner/repo/pull/42
 
 # Re-check findings from previous iteration review
 prv bundle --branch feat/auth --prior reviews/2026-11-19-feat-auth.json
+
+# Opt in to the adversarial refute-first review persona
+prv bundle --branch feat/auth --persona staff-adversarial
 ```
 
-Use the JSON saved by `prv report` with `--prior`. The bundle includes up to 50 prior findings and reports how many were omitted.
+Use the JSON saved by `prv report` with `--prior`. The bundle includes up to 50 prior findings and reports how many were omitted. Pass `--persona staff-adversarial` to emit explicit refute-first reviewer instructions.
 
 ---
 
@@ -283,7 +286,7 @@ context:
   max_size_kb: 256
 
 review:
-  persona: "staff-advisory"
+  persona: "staff-advisory"        # default; opt-in: "staff-adversarial", "strict-linter", "mentor"
   # default_base_branch: "staging"
   # max_diff_lines: 3000
   # require_evidence: false
@@ -353,6 +356,7 @@ review:
 | | `--dirty, -w` | Bundle uncommitted working-tree and staged changes (`git diff HEAD`). |
 | | `--context-file, -c` | Path to markdown context/spec file (repeatable). |
 | | `--prior, -P` | Path to prior review JSON report for iteration re-check. |
+| | `--persona` | Override review persona (`staff-advisory`, `staff-adversarial`, etc.). |
 | | `--max-lines` | Maximum total diff lines to include in bundle (risk-tiered; `0` = unlimited). |
 | | `--pr` | GitHub PR number or full URL. |
 | | `--output, -o` | Output file path (default: stdout). |

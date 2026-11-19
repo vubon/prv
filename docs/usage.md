@@ -222,7 +222,7 @@ You can customize review personas, sensitive directory paths, custom team engine
 version: "1"
 
 review:
-  # Review persona: "staff-advisory" (default) | "strict-linter" | "mentor"
+  # Review persona: "staff-advisory" (default) | "staff-adversarial" | "strict-linter" | "mentor"
   persona: "staff-advisory"
 
   # Strictness settings for review verdicts
@@ -269,6 +269,12 @@ prv bundle --branch feat/user-auth --config .prv.prod.yaml
 prv bundle -b feat/user-auth -c .prv.prod.yaml
 ```
 
+Use `--persona` to override `review.persona` for one bundle. The `staff-adversarial` persona adds instructions to challenge assumptions, check blast radius, and provide reproducible evidence for blocking findings.
+
+```bash
+prv bundle --staged --persona staff-adversarial
+```
+
 > [!NOTE]
 > In zero-clone `--pr` mode, repository configuration is automatically loaded from `.prv.yaml` if running inside the repository clone, or when explicitly passed via `--config`. For remote PRs evaluated outside their repository, safe defaults are applied.
 
@@ -284,6 +290,7 @@ prv bundle -b feat/user-auth -c .prv.prod.yaml
 | `--pr` | | string | `""` | GitHub PR number or URL (zero-clone) |
 | `--repo` | `-r` | string | `"."` | Path to local Git repository |
 | `--config` | `-c` | string | `""` | Path to custom `.prv.yaml` configuration file |
+| `--persona` | | string | `review.persona` | Override the configured review persona for this bundle |
 | `--output` | `--out`, `-o` | string | `""` | Save bundle to specific file path |
 | `--json` | | bool | `false` | Output bundle as raw JSON |
 | `--include-locks`| | bool | `false` | Include lockfiles and generated files in diff |

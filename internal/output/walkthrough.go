@@ -38,7 +38,7 @@ func extractSymbol(text string) (name string, isType bool) {
 	return "", false
 }
 
-// singleLineText makes control characters and invalid UTF-8 visible in rendered paths.
+// singleLineText makes control characters and invalid UTF-8 visible.
 func singleLineText(s string) string {
 	if !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) >= 0 {
 		return strconv.Quote(s)
@@ -46,9 +46,9 @@ func singleLineText(s string) string {
 	return s
 }
 
-// MarkdownPath renders a Git filename as a single inline code span.
-func MarkdownPath(name string) string {
-	text := singleLineText(name)
+// MarkdownCodeSpan renders text as a single inline code span.
+func MarkdownCodeSpan(value string) string {
+	text := singleLineText(value)
 	fence := backtickFenceFor(text, 1)
 	if strings.Contains(text, "`") || strings.HasPrefix(text, " ") || strings.HasSuffix(text, " ") {
 		if strings.Trim(text, " ") != "" {
@@ -157,7 +157,7 @@ func extractChangesFromDiff(f models.FileChange) []string {
 
 	switch f.Status {
 	case "renamed":
-		changes = append(changes, "Renamed from "+MarkdownPath(f.OldPath))
+		changes = append(changes, "Renamed from "+MarkdownCodeSpan(f.OldPath))
 	case "deleted":
 		changes = append(changes, fmt.Sprintf("Deleted file (`-%d` lines removed)", f.Deletions))
 		return changes

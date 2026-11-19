@@ -92,6 +92,7 @@ type PRContext struct {
 	PriorReviewPRMismatch bool                 `json:"prior_review_pr_mismatch,omitempty"`
 	RulePolicy            *InvariantRulePolicy `json:"rule_policy,omitempty"`
 	Persona               string               `json:"persona,omitempty"`
+	Instructions          string               `json:"instructions,omitempty"`
 	ArchitectureDiagram   string               `json:"architecture_diagram,omitempty"`
 	ModifiedConfigFile    string               `json:"modified_config_file,omitempty"`
 	BundledAt             time.Time            `json:"bundled_at"`
@@ -110,16 +111,17 @@ type SummaryStats struct {
 
 // BundleOptions holds flags and configuration for the bundle command.
 type BundleOptions struct {
-	Branch       string
-	BaseBranch   string
-	PRIdentifier string // e.g. "42" or "https://github.com/org/repo/pull/42"
-	RepoPath     string
-	ConfigPath   string // Optional custom path to .prv.yaml
-	Staged       bool   // Bundle git staged changes (--cached) for local self-review
-	Dirty        bool   // Bundle uncommitted working tree and staged changes (git diff HEAD)
-	FormatJSON   bool
-	IncludeLocks bool
-	MaxDiffLines int      // Optional diff line budget cap (--max-lines; 0 = unlimited)
-	ContextFiles []string // Explicit reviewer context file paths (--context-file)
-	PriorPath    string   // Optional path to prior review JSON (--prior)
+	Branch          string
+	BaseBranch      string
+	PRIdentifier    string // e.g. "42" or "https://github.com/org/repo/pull/42"
+	RepoPath        string
+	ConfigPath      string // Optional custom path to .prv.yaml
+	Staged          bool   // Bundle git staged changes (--cached) for local self-review
+	Dirty           bool   // Bundle uncommitted working tree and staged changes (git diff HEAD)
+	FormatJSON      bool
+	IncludeLocks    bool
+	MaxDiffLines    int      // Optional diff line budget cap (--max-lines; 0 = unlimited)
+	ContextFiles    []string // Explicit reviewer context file paths (--context-file)
+	PriorPath       string   // Optional path to prior review JSON (--prior)
+	PersonaOverride string   // Optional CLI persona override (--persona)
 }

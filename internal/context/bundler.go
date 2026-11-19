@@ -370,10 +370,16 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 
 // buildContext computes stats, applies custom filters, flags sensitive files, and builds PRContext.
 func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange, userContext []models.UserContextDoc, prior *priorReview, cfg *config.Config, activeConfigPaths ...string) *models.PRContext {
+	persona := cfg.Review.Persona
+	instructions := matrix.PersonaInstructions(persona)
+	if instructions != "" {
+		persona = strings.TrimSpace(persona)
+	}
 	ctx := &models.PRContext{
 		Metadata:       *meta,
 		BundledAt:      time.Now(),
-		Persona:        cfg.Review.Persona,
+		Persona:        persona,
+		Instructions:   instructions,
 		CustomRules:    cfg.Review.CustomRules,
 		ForbiddenRules: cfg.Review.Rules.Forbidden,
 		MandatedRules:  cfg.Review.Rules.Mandated,
@@ -565,7 +571,7 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		fmt.Fprintf(&sb, "- **Diff Budget:** %d files truncated to fit line limit\n", ctx.SummaryStats.TruncatedFiles)
 	}
 	if ctx.Persona != "" {
-		fmt.Fprintf(&sb, "- **Review Persona:** `%s`\n", ctx.Persona)
+		fmt.Fprintf(&sb, "- **Review Persona:** %s\n", output.MarkdownCodeSpan(ctx.Persona))
 	}
 	sb.WriteString("\n")
 
@@ -574,14 +580,14 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		fmt.Fprintf(&sb, "> **Security Sensitive Paths Touched (%d files):**\n", len(ctx.SensitiveFiles))
 		sb.WriteString("> Reviewers must pay extra attention to security, authorization, and data integrity for:\n")
 		for _, s := range ctx.SensitiveFiles {
-			fmt.Fprintf(&sb, "> - %s\n", output.MarkdownPath(s))
+			fmt.Fprintf(&sb, "> - %s\n", output.MarkdownCodeSpan(s))
 		}
 		sb.WriteString("\n")
 	}
 
 	if ctx.ModifiedConfigFile != "" {
 		sb.WriteString("> [!CAUTION]\n")
-		fmt.Fprintf(&sb, "> Configuration file %s was modified in this change. Review config edits carefully to ensure team rules were not weakened (base-revision rules apply by default unless `--config` is passed).\n\n", output.MarkdownPath(ctx.ModifiedConfigFile))
+		fmt.Fprintf(&sb, "> Configuration file %s was modified in this change. Review config edits carefully to ensure team rules were not weakened (base-revision rules apply by default unless `--config` is passed).\n\n", output.MarkdownCodeSpan(ctx.ModifiedConfigFile))
 	}
 
 	if len(ctx.CustomRules) > 0 || len(ctx.ForbiddenRules) > 0 || len(ctx.MandatedRules) > 0 {
@@ -676,6 +682,12 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		}
 	}
 
+	if ctx.Instructions != "" {
+		personaLabel := strings.TrimSpace(ctx.Persona)
+		fmt.Fprintf(&sb, "## 🛡️ Review Persona Instructions (%s)\n\n", output.MarkdownCodeSpan(personaLabel))
+		sb.WriteString(ctx.Instructions + "\n\n")
+	}
+
 	sb.WriteString("## PR Description / Intent\n")
 	sb.WriteString(ctx.Metadata.Description + "\n\n")
 
@@ -728,7 +740,7 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		if file.IsTruncated {
 			badges += " ✂️ `[TRUNCATED]`"
 		}
-		fmt.Fprintf(&sb, "### File: %s `(+%d / -%d)`%s\n\n", output.MarkdownPath(file.Path), file.Additions, file.Deletions, badges)
+		fmt.Fprintf(&sb, "### File: %s `(+%d / -%d)`%s\n\n", output.MarkdownCodeSpan(file.Path), file.Additions, file.Deletions, badges)
 		sb.WriteString("```diff\n")
 		sb.WriteString(file.DiffHunk)
 		sb.WriteString("\n```\n\n")
@@ -1159,6 +1171,9 @@ func applyCLIOptions(base *config.Config, opts models.BundleOptions) config.Conf
 	out := *base
 	if opts.MaxDiffLines > 0 {
 		out.Review.MaxDiffLines = opts.MaxDiffLines
+	}
+	if trimmed := strings.TrimSpace(opts.PersonaOverride); trimmed != "" {
+		out.Review.Persona = trimmed
 	}
 	return out
 }

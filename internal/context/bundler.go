@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -655,7 +656,10 @@ func (b *Bundler) resolveTargetBaseBranch(opts models.BundleOptions, explicitCfg
 		}
 		return explicitCfg.Review.DefaultBaseBranch, nil
 	}
-	repoDefaultBase := b.gitRunner.GetDefaultBaseBranch()
+	return b.configuredDefaultBaseBranch(b.gitRunner.GetDefaultBaseBranch())
+}
+
+func (b *Bundler) configuredDefaultBaseBranch(repoDefaultBase string) (string, error) {
 	if repoDefaultBase != "" {
 		if baseCfg, _, found, err := b.readConfigAtRef(repoDefaultBase); err == nil && found && baseCfg.Review.DefaultBaseBranch != "" {
 			if err := git.ValidateRefName(baseCfg.Review.DefaultBaseBranch); err != nil {
@@ -802,6 +806,174 @@ func (b *Bundler) resolveBaseConfig(baseRef string, explicitCfg *config.Config, 
 		return baseCfg, traversed, nil
 	}
 	return config.DefaultConfig(), nil, nil
+}
+
+// ResolveReportConfig returns the effective policy and the full PR URL, when a target was supplied.
+// Numeric targets are resolved by GitHub CLI in the checkout's configured repository.
+func (b *Bundler) ResolveReportConfig(configPath, headBranch, baseBranch, prTarget string) (*config.Config, string, error) {
+	var meta *models.PRMetadata
+	if number, err := strconv.Atoi(prTarget); err == nil {
+		meta, err = b.ghClient.FetchPRMetadataViaCLI(prTarget, b.repoPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("cannot resolve PR %q through GitHub CLI, supply a full PR URL: %w", prTarget, err)
+		}
+		host, owner, repo, resolvedNumber, err := git.ParsePRURLWithHost(meta.URL)
+		if err != nil || host == "" || owner == "" || repo == "" || resolvedNumber != number ||
+			(!strings.HasPrefix(meta.URL, "https://") && !strings.HasPrefix(meta.URL, "http://")) {
+			return nil, "", fmt.Errorf("GitHub CLI did not return a full URL for PR %d, supply a full PR URL", number)
+		}
+		prTarget = meta.URL
+	}
+	if strings.TrimSpace(configPath) != "" {
+		cfg, err := config.LoadConfig(b.repoPath, configPath)
+		return cfg, prTarget, err
+	}
+	if prTarget != "" {
+		cfg, err := b.resolveTargetPRReportConfig(prTarget, meta)
+		return cfg, prTarget, err
+	}
+	cfg, err := b.resolveLocalReportConfig(headBranch, baseBranch)
+	return cfg, "", err
+}
+
+func (b *Bundler) resolveLocalReportConfig(headBranch, baseBranch string) (*config.Config, error) {
+	if !b.gitRunner.IsGitRepo() {
+		return config.LoadConfig(b.repoPath, "")
+	}
+
+	opts := models.BundleOptions{RepoPath: b.repoPath}
+	targetRef := strings.TrimSpace(baseBranch)
+	if targetRef == "HEAD (working tree)" || targetRef == "index (staged)" {
+		cfg, _, err := b.resolveBaseConfig("HEAD", nil, opts)
+		return cfg, err
+	}
+	repoDefaultBase := b.gitRunner.DetectDefaultBaseBranch()
+	if targetRef != "" && !b.isSelfReferentialReportBase(targetRef, headBranch, repoDefaultBase) {
+		cfg, _, err := b.resolveBaseConfig(targetRef, nil, opts)
+		return cfg, err
+	}
+
+	if lookup := b.reportLookupBranch(headBranch); lookup != "" {
+		if meta, err := b.fetchPRMetadataForReport(lookup); err == nil && meta.HeadBranch == lookup {
+			if host, owner, repo, _, err := git.ParsePRURLWithHost(meta.URL); err == nil && host != "" {
+				if remote, err := b.gitRunner.FindRepoRemote(host, owner, repo); err == nil {
+					return b.readReportPRBaseConfig(meta, remote)
+				}
+			}
+		}
+	}
+
+	if repoDefaultBase == "" {
+		repoDefaultBase = "HEAD"
+	} else {
+		if !b.gitRunner.RefExists(repoDefaultBase) {
+			if _, _, err := b.gitRunner.ResolveBaseRevision(repoDefaultBase); err != nil {
+				return nil, fmt.Errorf("cannot resolve default report base %q: %w", repoDefaultBase, err)
+			}
+		}
+		var err error
+		repoDefaultBase, err = b.configuredDefaultBaseBranch(repoDefaultBase)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cfg, _, err := b.resolveBaseConfig(repoDefaultBase, nil, opts)
+	return cfg, err
+}
+
+func (b *Bundler) resolveTargetPRReportConfig(target string, meta *models.PRMetadata) (*config.Config, error) {
+	host, owner, repo, number, err := git.ParsePRURLWithHost(target)
+	if err != nil || host == "" {
+		return nil, fmt.Errorf("invalid PR URL %q", target)
+	}
+	remote, err := b.gitRunner.FindRepoRemote(host, owner, repo)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load the base policy for PR %q without a matching checkout, use --repo or supply --config: %w", target, err)
+	}
+	if meta == nil {
+		meta, err = b.fetchPRMetadataForReport(target)
+		if err != nil {
+			return nil, fmt.Errorf("cannot verify the base commit for PR %q, supply --config to specify review policy explicitly: %w", target, err)
+		}
+	}
+	metaHost, metaOwner, metaRepo, metaNumber, err := git.ParsePRURLWithHost(meta.URL)
+	if err != nil || metaNumber != number || !strings.EqualFold(metaHost, host) ||
+		!strings.EqualFold(metaOwner, owner) || !strings.EqualFold(metaRepo, repo) {
+		return nil, fmt.Errorf("PR metadata does not match target %q, supply --config to specify review policy explicitly", target)
+	}
+	return b.readReportPRBaseConfig(meta, remote)
+}
+
+func (b *Bundler) readReportPRBaseConfig(meta *models.PRMetadata, remote string) (*config.Config, error) {
+	baseCommit := strings.TrimSpace(meta.BaseCommit)
+	if !git.IsHexCommitID(baseCommit) {
+		return nil, fmt.Errorf("PR %q did not provide an exact base commit, supply --config to specify review policy explicitly", meta.URL)
+	}
+	if !b.gitRunner.RefExists(baseCommit) {
+		if err := b.gitRunner.FetchCommitFromRemote(remote, baseCommit); err != nil {
+			return nil, fmt.Errorf("cannot load PR base commit %q, supply --config to specify review policy explicitly: %w", baseCommit, err)
+		}
+		if !b.gitRunner.RefExists(baseCommit) {
+			return nil, fmt.Errorf("cannot load PR base commit %q after fetching from %q, supply --config to specify review policy explicitly", baseCommit, remote)
+		}
+	}
+	cfg, _, found, err := b.readConfigAtRef(baseCommit)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return config.DefaultConfig(), nil
+	}
+	return cfg, nil
+}
+
+func (b *Bundler) reportLookupBranch(headBranch string) string {
+	if trimmed := strings.TrimSpace(headBranch); trimmed != "" && trimmed != "HEAD" {
+		return trimmed
+	}
+	curr, err := b.gitRunner.GetCurrentBranch()
+	if err == nil && strings.TrimSpace(curr) != "" && strings.TrimSpace(curr) != "HEAD" {
+		return strings.TrimSpace(curr)
+	}
+	return ""
+}
+
+func (b *Bundler) fetchPRMetadataForReport(prOrBranch string) (*models.PRMetadata, error) {
+	meta, err := b.ghClient.FetchPRMetadataViaCLI(prOrBranch, b.repoPath)
+	if err == nil {
+		return meta, nil
+	}
+	if host, owner, repo, number, parseErr := git.ParsePRURLWithHost(prOrBranch); parseErr == nil && host == "github.com" {
+		return b.ghClient.FetchPRMetadataViaAPI(owner, repo, number)
+	}
+	return nil, err
+}
+
+func (b *Bundler) isSelfReferentialReportBase(baseRef, headBranch, repoDefaultBase string) bool {
+	trimmedBase := strings.TrimSpace(baseRef)
+	trimmedDefault := strings.TrimSpace(repoDefaultBase)
+	if trimmedBase == "" || trimmedDefault == "" || trimmedBase == trimmedDefault {
+		return false
+	}
+	_, defaultSHA, defaultErr := b.gitRunner.ResolveBaseRevision(trimmedDefault)
+	if defaultErr != nil || defaultSHA == "" {
+		return false
+	}
+	_, baseSHA, baseErr := b.gitRunner.ResolveBaseRevision(trimmedBase)
+	if baseErr != nil || baseSHA == "" || baseSHA == defaultSHA {
+		return false
+	}
+	trimmedHead := strings.TrimSpace(headBranch)
+	if trimmedHead != "" {
+		if headSHA, headErr := b.gitRunner.ResolveHeadCommit(trimmedHead); headErr == nil {
+			return headSHA == baseSHA
+		}
+		return trimmedBase == trimmedHead
+	}
+	if _, currSHA, currErr := b.gitRunner.ResolveBaseRevision("HEAD"); currErr == nil && currSHA == baseSHA {
+		return true
+	}
+	return false
 }
 
 func applyCLIOptions(base *config.Config, opts models.BundleOptions) config.Config {

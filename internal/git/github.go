@@ -54,14 +54,13 @@ type ghViewResponse struct {
 	CreatedAt   string `json:"createdAt"`
 }
 
-// FetchPRViaCLI attempts to fetch PR metadata and diff using the `gh` CLI.
-func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*models.PRMetadata, string, error) {
+// FetchPRMetadataViaCLI fetches PR metadata using the `gh` CLI without fetching the diff.
+func (c *GitHubClient) FetchPRMetadataViaCLI(prOrBranch string, repoPath string) (*models.PRMetadata, error) {
 	// Verify that the gh CLI is available on the host system
 	if _, lookErr := exec.LookPath("gh"); lookErr != nil {
-		return nil, "", fmt.Errorf("GitHub CLI 'gh' is not installed or not in $PATH (install via 'brew install gh' or https://cli.github.com)")
+		return nil, fmt.Errorf("GitHub CLI 'gh' is not installed or not in $PATH (install via 'brew install gh' or https://cli.github.com)")
 	}
 
-	// 1. Fetch metadata JSON via `gh pr view`
 	args := []string{"pr", "view", prOrBranch, "--json", "number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,url,createdAt"}
 	cmd := exec.Command("gh", args...)
 	if repoPath != "" {
@@ -72,14 +71,14 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
 			stderrMsg := strings.TrimSpace(string(exitErr.Stderr))
-			return nil, "", fmt.Errorf("gh pr view failed: %s (%w)", stderrMsg, err)
+			return nil, fmt.Errorf("gh pr view failed: %s (%w)", stderrMsg, err)
 		}
-		return nil, "", fmt.Errorf("gh pr view failed: %w", err)
+		return nil, fmt.Errorf("gh pr view failed: %w", err)
 	}
 
 	var resp ghViewResponse
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, "", fmt.Errorf("failed to parse gh output: %w", err)
+		return nil, fmt.Errorf("failed to parse gh output: %w", err)
 	}
 
 	var createdAt time.Time
@@ -101,6 +100,17 @@ func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*model
 	}
 	if owner, repo, _, err := ParsePRURL(resp.URL); err == nil && owner != "" && repo != "" {
 		meta.Repo = fmt.Sprintf("%s/%s", owner, repo)
+	}
+
+	return meta, nil
+}
+
+// FetchPRViaCLI attempts to fetch PR metadata and diff using the `gh` CLI.
+func (c *GitHubClient) FetchPRViaCLI(prOrBranch string, repoPath string) (*models.PRMetadata, string, error) {
+	// 1. Fetch metadata JSON via `gh pr view`
+	meta, err := c.FetchPRMetadataViaCLI(prOrBranch, repoPath)
+	if err != nil {
+		return nil, "", err
 	}
 
 	// 2. Fetch unified diff via `gh pr diff`
@@ -145,15 +155,14 @@ func ParsePRURLWithHost(prURL string) (host, owner, repo string, number int, err
 	return "", "", "", 0, fmt.Errorf("unsupported GitHub PR URL format: %s", prURL)
 }
 
-// FetchPRViaAPI directly fetches PR metadata and diff via GitHub REST API (Zero-Clone Mode without gh CLI).
-func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.PRMetadata, string, error) {
+// FetchPRMetadataViaAPI fetches PR metadata without requesting the diff.
+func (c *GitHubClient) FetchPRMetadataViaAPI(owner, repo string, prNumber int) (*models.PRMetadata, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	// 1. Fetch PR Metadata JSON
 	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL(), owner, repo, prNumber)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	if c.Token != "" {
@@ -162,13 +171,13 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("github API request failed: %w", err)
+		return nil, fmt.Errorf("github API request failed: %w", err)
 	}
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(res.Body)
-		return nil, "", fmt.Errorf("github API returned HTTP %d: %s", res.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("github API returned HTTP %d: %s", res.StatusCode, string(bodyBytes))
 	}
 
 	var prData struct {
@@ -191,11 +200,11 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 	}
 
 	if err := json.NewDecoder(res.Body).Decode(&prData); err != nil {
-		return nil, "", fmt.Errorf("failed to decode PR metadata: %w", err)
+		return nil, fmt.Errorf("failed to decode PR metadata: %w", err)
 	}
 
 	createdAt, _ := time.Parse(time.RFC3339, prData.CreatedAt)
-	meta := &models.PRMetadata{
+	return &models.PRMetadata{
 		Number:      prData.Number,
 		Title:       prData.Title,
 		Description: prData.Body,
@@ -207,9 +216,17 @@ func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.
 		Repo:        fmt.Sprintf("%s/%s", owner, repo),
 		URL:         prData.HTMLURL,
 		CreatedAt:   createdAt,
-	}
+	}, nil
+}
 
-	// 2. Fetch Unified Diff Stream (Zero-Clone)
+// FetchPRViaAPI directly fetches PR metadata and diff via GitHub REST API (Zero-Clone Mode without gh CLI).
+func (c *GitHubClient) FetchPRViaAPI(owner, repo string, prNumber int) (*models.PRMetadata, string, error) {
+	meta, err := c.FetchPRMetadataViaAPI(owner, repo, prNumber)
+	if err != nil {
+		return nil, "", err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", c.baseURL(), owner, repo, prNumber)
 	diffReq, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return meta, "", err
@@ -315,18 +332,20 @@ func (c *GitHubClient) PostPRComment(prOrURL string, commentBody string, repoPat
 		return fmt.Errorf("PR identifier (number or URL) cannot be empty")
 	}
 
+	host, _, _, _, _ := ParsePRURLWithHost(prOrURL)
+	allowREST := c.Token != "" && (host == "" || host == "github.com")
+
 	// Try gh CLI first if available
 	if _, err := exec.LookPath("gh"); err == nil {
 		if cliErr := c.PostPRCommentViaCLI(prOrURL, commentBody, repoPath); cliErr == nil {
 			return nil
-		} else if c.Token == "" {
-			// CLI failed and no token configured for API fallback
+		} else if !allowREST {
 			return cliErr
 		}
 	}
 
 	// Fallback to GitHub REST API if GITHUB_TOKEN is available
-	if c.Token != "" {
+	if allowREST {
 		owner, repo, number, err := c.ResolveRepoAndPR(prOrURL, repoPath)
 		if err != nil {
 			return err
@@ -404,24 +423,27 @@ func (c *GitHubClient) PostPRReview(prOrURL string, payload *models.PullRequestR
 		return err
 	}
 
+	host, _, _, _, _ := ParsePRURLWithHost(prOrURL)
+	allowREST := c.Token != "" && (host == "" || host == "github.com")
+
 	// Try gh CLI first if available
 	if _, lookErr := exec.LookPath("gh"); lookErr == nil {
-		if cliErr := c.PostPRReviewViaCLI(owner, repo, number, payload, repoPath); cliErr == nil {
+		if cliErr := c.postPRReviewViaCLI(host, owner, repo, number, payload, repoPath); cliErr == nil {
 			return nil
 		} else if len(payload.Comments) > 0 && strings.Contains(strings.ToLower(cliErr.Error()), "diff") {
 			fmt.Fprintf(os.Stderr, "Warning: inline diff anchoring failed (%v); falling back to top-level review\n", cliErr)
 			fallbackPayload := *payload
 			fallbackPayload.Comments = nil
-			if retryErr := c.PostPRReviewViaCLI(owner, repo, number, &fallbackPayload, repoPath); retryErr == nil {
+			if retryErr := c.postPRReviewViaCLI(host, owner, repo, number, &fallbackPayload, repoPath); retryErr == nil {
 				return nil
 			}
-		} else if c.Token == "" {
+		} else if !allowREST {
 			return cliErr
 		}
 	}
 
 	// Fallback to GitHub REST API if GITHUB_TOKEN is available
-	if c.Token != "" {
+	if allowREST {
 		apiErr := c.PostPRReviewViaAPI(owner, repo, number, payload)
 		if apiErr == nil {
 			return nil
@@ -440,8 +462,8 @@ func (c *GitHubClient) PostPRReview(prOrURL string, payload *models.PullRequestR
 	return fmt.Errorf("failed to post PR review: neither GitHub CLI 'gh' succeeded nor valid GITHUB_TOKEN was available")
 }
 
-// PostPRReviewViaCLI publishes a PR review with inline comments using `gh api repos/<owner>/<repo>/pulls/<number>/reviews --input -`.
-func (c *GitHubClient) PostPRReviewViaCLI(owner, repo string, prNumber int, payload *models.PullRequestReviewPayload, repoPath string) error {
+// postPRReviewViaCLI publishes a PR review with inline comments using gh api.
+func (c *GitHubClient) postPRReviewViaCLI(host, owner, repo string, prNumber int, payload *models.PullRequestReviewPayload, repoPath string) error {
 	if _, lookErr := exec.LookPath("gh"); lookErr != nil {
 		return fmt.Errorf("GitHub CLI 'gh' is not installed or not in $PATH")
 	}
@@ -452,7 +474,11 @@ func (c *GitHubClient) PostPRReviewViaCLI(owner, repo string, prNumber int, payl
 	}
 
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, prNumber)
-	cmd := exec.Command("gh", "api", endpoint, "--input", "-")
+	args := []string{"api", endpoint, "--input", "-"}
+	if host != "" {
+		args = append(args, "--hostname", host)
+	}
+	cmd := exec.Command("gh", args...)
 	if repoPath != "" {
 		cmd.Dir = repoPath
 	}

@@ -56,6 +56,10 @@ func FormatConventionalComment(issue models.Issue) string {
 
 	sb.WriteString(issue.Description + "\n\n")
 
+	if ev := formatEvidenceSection(issue.Evidence); ev != "" {
+		sb.WriteString(ev)
+	}
+
 	if issue.CodeSnippet != "" {
 		sb.WriteString("```go\n" + issue.CodeSnippet + "\n```\n\n")
 	}

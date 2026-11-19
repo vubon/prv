@@ -1,11 +1,14 @@
 package output
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vubon/prv/internal/models"
 )
@@ -71,6 +74,9 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 			fmt.Fprintf(&sb, "### %d. %s `%s#L%d`\n\n", i+1, issue.Title, issue.File, issue.LineStart)
 			fmt.Fprintf(&sb, "- **Dimension:** `%s` | **Severity:** `%s`\n\n", issue.Dimension, issue.Severity)
 			sb.WriteString(issue.Description + "\n\n")
+			if ev := formatEvidenceSection(issue.Evidence); ev != "" {
+				sb.WriteString(ev)
+			}
 			if issue.CodeSnippet != "" {
 				sb.WriteString("```go\n" + issue.CodeSnippet + "\n```\n\n")
 			}
@@ -108,24 +114,31 @@ func GenerateMarkdownReport(res *models.ReviewResult) string {
 		} else {
 			fmt.Fprintf(&sb, "#### `%s#L%d` %s\n\n", c.File, c.Line, c.Label)
 		}
-		sb.WriteString("````markdown\n")
+		fence := backtickFenceFor(c.MarkdownBody, 4)
+		sb.WriteString(fence + "markdown\n")
 		sb.WriteString(c.MarkdownBody)
 		if !strings.HasSuffix(c.MarkdownBody, "\n") {
 			sb.WriteString("\n")
 		}
-		sb.WriteString("````\n\n")
+		sb.WriteString(fence + "\n\n")
 	}
 
 	return sb.String()
 }
 
-// SaveReportToFile writes the markdown report to the designated reviews/ directory.
+const maxReportFilenameBytes = 255
+
+// SaveReportToFile writes the markdown report and a matching .json sibling file
+// to the designated reviews/ directory using collision-safe filenames (-2, -3, ...).
 func SaveReportToFile(res *models.ReviewResult, outputDir string) (string, error) {
+	if res == nil {
+		return "", fmt.Errorf("cannot save nil review result")
+	}
 	if outputDir == "" {
 		outputDir = "reviews"
 	}
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create output directory %s: %w", outputDir, err)
 	}
 
 	if res.ReviewedAt.IsZero() {
@@ -135,16 +148,121 @@ func SaveReportToFile(res *models.ReviewResult, outputDir string) (string, error
 		res.Branch = "review"
 	}
 
-	sanitizedBranch := strings.ReplaceAll(res.Branch, "/", "-")
-	filename := fmt.Sprintf("%s-%s.md", res.ReviewedAt.Format("2006-01-02"), sanitizedBranch)
-	filePath := filepath.Join(outputDir, filename)
+	sanitizedBranch := sanitizeBranchFilename(res.Branch)
+	datePrefix := res.ReviewedAt.Format("2006-01-02")
 
+	// Generate Markdown before marshaling JSON so defaulted RiskLevel/ReviewedAt match across both artifacts.
 	content := GenerateMarkdownReport(res)
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return "", err
+	jsonBytes, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal review JSON: %w", err)
 	}
+	jsonBytes = append(jsonBytes, '\n')
 
-	return filePath, nil
+	const longestExt = ".json"
+	for n := 1; ; n++ {
+		suffix := ""
+		if n > 1 {
+			suffix = fmt.Sprintf("-%d", n)
+		}
+		maxBranchBytes := maxReportFilenameBytes - len(datePrefix) - 1 - len(suffix) - len(longestExt)
+		if maxBranchBytes < 1 {
+			return "", fmt.Errorf("unable to construct unique report filename within %d bytes", maxReportFilenameBytes)
+		}
+		boundedBranch := truncateUTF8Bytes(sanitizedBranch, maxBranchBytes)
+		if boundedBranch == "" {
+			boundedBranch = "r"
+		}
+		stem := fmt.Sprintf("%s-%s%s", datePrefix, boundedBranch, suffix)
+		mdPath := filepath.Join(outputDir, stem+".md")
+		jsonPath := filepath.Join(outputDir, stem+".json")
+
+		exists, statErr := anyReportFileExists(mdPath, jsonPath)
+		if statErr != nil {
+			return "", statErr
+		}
+		if exists {
+			continue
+		}
+
+		if err := writeExclusiveFile(mdPath, []byte(content)); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("failed to write markdown report %s: %w", mdPath, err)
+		}
+		if err := writeExclusiveFile(jsonPath, jsonBytes); err != nil {
+			_ = os.Remove(mdPath)
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("failed to write JSON report %s: %w", jsonPath, err)
+		}
+		return mdPath, nil
+	}
+}
+
+func sanitizeBranchFilename(branch string) string {
+	s := strings.TrimSpace(branch)
+	s = strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, "\\", "-")
+	s = strings.ReplaceAll(s, "..", "-")
+	if s == "" || s == "." {
+		return "review"
+	}
+	return s
+}
+
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := 0
+	for i, r := range s {
+		rl := utf8.RuneLen(r)
+		if rl < 0 {
+			rl = 1
+		}
+		if i+rl > maxBytes {
+			break
+		}
+		end = i + rl
+	}
+	return s[:end]
+}
+
+func anyReportFileExists(paths ...string) (bool, error) {
+	for _, p := range paths {
+		_, err := os.Lstat(p)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("failed to check existing report path %s: %w", p, err)
+		}
+	}
+	return false, nil
+}
+
+func writeExclusiveFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		_ = os.Remove(path)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(path)
+		return closeErr
+	}
+	return nil
 }
 
 // BuildReviewPayload constructs a GitHub PullRequestReviewPayload from a ReviewResult.

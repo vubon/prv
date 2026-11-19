@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,6 +57,7 @@ Examples:
   prv walkthrough --dirty
   prv report --file review.json --pr 42 --post
   prv report --file review.json --pr 42 --post --inline
+  prv report --file review.json --strict-evidence
   prv report --file review.json --copy
   prv init                             # Scaffold .prv.yaml and .prv/context/
   prv init --context-dir specs/reviews # Scaffold with custom context directory
@@ -302,9 +305,90 @@ func runBundle(args []string) {
 }
 
 func runReport(args []string) {
-	fs := flag.NewFlagSet("report", flag.ExitOnError)
-	var filePath, outputDir string
-	var copyClip bool
+	if err := executeReport(args, os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// parseFlagsStrict parses flags occurring anywhere before "--" while returning any flag parse error
+// (including flag.ErrHelp) and preserving positional arguments.
+func parseFlagsStrict(fs *flag.FlagSet, args []string) ([]string, error) {
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	var positionals []string
+	for {
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		// Stop if Go's flag parser halted because of an explicit "--" terminator.
+		consumed := len(args) - len(rest)
+		if consumed > 0 && args[consumed-1] == "--" {
+			positionals = append(positionals, rest...)
+			break
+		}
+		positionals = append(positionals, rest[0])
+		args = rest[1:]
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+	}
+	return positionals, nil
+}
+
+func resolveReportConfigDir(repoPath, configPath string) string {
+	if strings.TrimSpace(configPath) != "" {
+		return repoPath
+	}
+	runner := git.NewGitRunner(repoPath)
+	if runner.IsGitRepo() {
+		if root, err := runner.GetRepoRoot(); err == nil && root != "" {
+			return root
+		}
+	}
+	return repoPath
+}
+
+func reportPRTarget(prID string, res *models.ReviewResult) (string, error) {
+	target := strings.TrimSpace(prID)
+	fromJSONURL := false
+	if target == "" {
+		target = strings.TrimSpace(res.PRURL)
+		fromJSONURL = target != ""
+		if target == "" && res.PRNumber != 0 {
+			target = strconv.Itoa(res.PRNumber)
+		}
+	}
+	if target == "" {
+		return "", nil
+	}
+
+	if number, err := strconv.Atoi(target); !fromJSONURL && err == nil && number > 0 {
+		return strconv.Itoa(number), nil
+	}
+
+	host, owner, repo, number, err := git.ParsePRURLWithHost(target)
+	if err != nil || host == "" || owner == "" || repo == "" || number <= 0 ||
+		(!strings.HasPrefix(target, "https://") && !strings.HasPrefix(target, "http://")) {
+		return "", fmt.Errorf("invalid PR target %q, supply a positive PR number or a full GitHub PR URL", target)
+	}
+	if fromJSONURL && res.PRNumber != 0 && number != res.PRNumber {
+		return "", fmt.Errorf("review JSON pr_url and pr_number refer to different PR numbers, supply --pr to select the target")
+	}
+	return target, nil
+}
+
+func executeReport(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var filePath, outputDir, repoPath, configPath string
+	var copyClip, strictEvidence bool
 
 	fs.StringVar(&filePath, "file", "", "Path to review JSON result file")
 	fs.StringVar(&filePath, "f", "", "Alias for --file")
@@ -312,8 +396,15 @@ func runReport(args []string) {
 	fs.StringVar(&outputDir, "dir", "reviews", "Output directory for markdown reports")
 	fs.StringVar(&outputDir, "d", "reviews", "Alias for --dir")
 
+	fs.StringVar(&repoPath, "repo", ".", "Path to local git repository (for reading .prv.yaml)")
+	fs.StringVar(&repoPath, "r", ".", "Alias for --repo")
+
+	fs.StringVar(&configPath, "config", "", "Custom path to .prv.yaml configuration file")
+
 	var prID string
 	fs.StringVar(&prID, "pr", "", "Target PR number or full GitHub PR URL (required when using --post unless specified in JSON)")
+
+	fs.BoolVar(&strictEvidence, "strict-evidence", false, "Fail if any BLOCKING issue lacks supporting evidence")
 
 	var postComment bool
 	fs.BoolVar(&postComment, "post", false, "Post generated review report directly to GitHub PR")
@@ -326,89 +417,117 @@ func runReport(args []string) {
 	fs.BoolVar(&copyClip, "copy", false, "Copy formatted comments to clipboard")
 	fs.BoolVar(&copyClip, "c", false, "Alias for --copy")
 
-	_ = fs.Parse(args)
+	positionals, err := parseFlagsStrict(fs, args)
+	if err != nil {
+		return err
+	}
+
+	if len(positionals) > 0 {
+		if len(positionals) == 1 && prID == "" {
+			arg := strings.TrimSpace(positionals[0])
+			if isAllDigits(arg) || strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
+				prID = arg
+			} else {
+				return fmt.Errorf("unexpected positional argument %q for report command", arg)
+			}
+		} else {
+			return fmt.Errorf("unexpected positional argument(s) %v for report command", positionals)
+		}
+	}
 
 	if filePath == "" {
-		fmt.Fprintln(os.Stderr, "Error: --file is required for report command")
 		fs.Usage()
-		os.Exit(1)
+		return fmt.Errorf("--file is required for report command")
 	}
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file %s: %v\n", filePath, err)
-		os.Exit(1)
+		return fmt.Errorf("reading file %s: %w", filePath, err)
 	}
 
 	var res models.ReviewResult
 	if err := json.Unmarshal(data, &res); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing review JSON: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("parsing review JSON: %w", err)
 	}
 
+	effectiveRepoPath := resolveReportConfigDir(repoPath, configPath)
+
+	prTarget, err := reportPRTarget(prID, &res)
+	if err != nil {
+		return err
+	}
+	if postComment && prTarget == "" {
+		return fmt.Errorf("--pr <number_or_url> is required when using --post (or set 'pr_number' / 'pr_url' in review JSON)")
+	}
+	bundler := context.NewBundler(effectiveRepoPath)
+	cfg, prURL, cfgErr := bundler.ResolveReportConfig(configPath, res.Branch, res.BaseBranch, prTarget)
+	if cfgErr != nil {
+		return fmt.Errorf("loading .prv.yaml: %w", cfgErr)
+	}
+
+	strict := strictEvidence || (cfg != nil && cfg.Review.RequireEvidence)
+	violations, evErr := output.ApplyEvidencePolicy(&res, strict)
+	if evErr != nil {
+		return evErr
+	}
+	if len(violations) > 0 {
+		_, _ = fmt.Fprint(stderr, output.FormatEvidenceWarning(violations))
+	}
+
+	if prURL != "" {
+		res.PRURL = prURL
+		_, _, res.PRNumber, _ = git.ParsePRURL(prURL)
+	}
 	savedPath, err := output.SaveReportToFile(&res, outputDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error saving report: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("saving report: %w", err)
 	}
-	fmt.Printf("Report saved to: %s\n", savedPath)
+	jsonPath := strings.TrimSuffix(savedPath, ".md") + ".json"
+	_, _ = fmt.Fprintf(stdout, "Report saved to: %s\n", savedPath)
+	_, _ = fmt.Fprintf(stdout, "JSON saved to: %s\n", jsonPath)
 
 	output.PrintReviewSummary(&res)
 
 	if postComment {
-		targetPR := strings.TrimSpace(prID)
-		if targetPR == "" {
-			if res.PRNumber > 0 {
-				targetPR = strconv.Itoa(res.PRNumber)
-			} else if res.PRURL != "" {
-				targetPR = res.PRURL
-			}
-		}
-
-		if targetPR == "" {
-			fmt.Fprintf(os.Stderr, "Error: --pr <number_or_url> is required when using --post (or set 'pr_number' / 'pr_url' in review JSON)\n")
-			os.Exit(1)
-		}
-
 		ghClient := git.NewGitHubClient()
 		payload := output.BuildReviewPayload(&res)
 
 		// If inline was explicitly requested OR if the review contains line-level issues/suggestions,
 		// publish as a GitHub PR Review with inline comments.
 		if inlineReview || len(payload.Comments) > 0 {
-			if reviewErr := ghClient.PostPRReview(targetPR, payload, "."); reviewErr != nil {
+			if reviewErr := ghClient.PostPRReview(prURL, payload, effectiveRepoPath); reviewErr != nil {
 				// Gracefully fall back to standard PR comment if review creation failed
 				reportContent := output.GenerateMarkdownReport(&res)
-				if commentErr := ghClient.PostPRComment(targetPR, reportContent, "."); commentErr != nil {
-					fmt.Fprintf(os.Stderr, "Error posting review to PR %s: %v\n", targetPR, reviewErr)
-					os.Exit(1)
+				if commentErr := ghClient.PostPRComment(prURL, reportContent, effectiveRepoPath); commentErr != nil {
+					return fmt.Errorf("posting review to PR %s: %w", prURL, reviewErr)
 				}
-				fmt.Printf("Successfully published review report as a comment on PR %s (fallback from review API)!\n", targetPR)
+				_, _ = fmt.Fprintf(stdout, "Successfully published review report as a comment on PR %s (fallback from review API)!\n", prURL)
 			} else {
 				if len(payload.Comments) > 0 {
-					fmt.Printf("Successfully published PR review with %d inline comments on PR %s (Verdict: %s)!\n", len(payload.Comments), targetPR, payload.Event)
+					_, _ = fmt.Fprintf(stdout, "Successfully published PR review with %d inline comments on PR %s (Verdict: %s)!\n", len(payload.Comments), prURL, payload.Event)
 				} else {
-					fmt.Printf("Successfully published PR review on PR %s (Verdict: %s)!\n", targetPR, payload.Event)
+					_, _ = fmt.Fprintf(stdout, "Successfully published PR review on PR %s (Verdict: %s)!\n", prURL, payload.Event)
 				}
 			}
 		} else {
 			reportContent := output.GenerateMarkdownReport(&res)
-			if postErr := ghClient.PostPRComment(targetPR, reportContent, "."); postErr != nil {
-				fmt.Fprintf(os.Stderr, "Error posting review comment to PR %s: %v\n", targetPR, postErr)
-				os.Exit(1)
+			if postErr := ghClient.PostPRComment(prURL, reportContent, effectiveRepoPath); postErr != nil {
+				return fmt.Errorf("posting review comment to PR %s: %w", prURL, postErr)
 			}
-			fmt.Printf("Successfully published review report as a comment on PR %s!\n", targetPR)
+			_, _ = fmt.Fprintf(stdout, "Successfully published review report as a comment on PR %s!\n", prURL)
 		}
 	}
 
 	if copyClip {
 		count, err := output.CopyCommentsToClipboard(&res)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not copy to clipboard: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "Warning: could not copy to clipboard: %v\n", err)
 		} else {
-			fmt.Printf("Copied %d review comments to clipboard!\n", count)
+			_, _ = fmt.Fprintf(stdout, "Copied %d review comments to clipboard!\n", count)
 		}
 	}
+
+	return nil
 }
 
 func runMatrix() {

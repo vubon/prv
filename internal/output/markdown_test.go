@@ -228,3 +228,249 @@ func TestGenerateMarkdownReport_MultiLineAnchor(t *testing.T) {
 		t.Errorf("expected multi-line anchor in Ready-to-Copy comments section, got:\n%s", report)
 	}
 }
+
+func TestGenerateMarkdownReport_EvidenceRendering(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle: "Evidence Render PR",
+		Branch:  "feat/evidence",
+		Verdict: models.VerdictRequestChanges,
+		Issues: []models.Issue{
+			{
+				Dimension:   "Logic",
+				File:        "client.go",
+				LineStart:   42,
+				Severity:    models.SeverityBlocking,
+				Title:       "Dropped timeout",
+				Description: "HTTP client timeout removed.",
+				Evidence:    "Diff removes `Timeout: 10 * time.Second`.",
+			},
+			{
+				Dimension:   "Logic",
+				File:        "parser.go",
+				LineStart:   18,
+				Severity:    models.SeverityBlocking,
+				Title:       "Bold syntax line",
+				Description: "Single-line raw diff must stay literal.",
+				Evidence:    "+ **value**",
+			},
+			{
+				Dimension:   "Logic",
+				File:        "other.go",
+				LineStart:   9,
+				Severity:    models.SeverityMinor,
+				Title:       "Minor note",
+				Description: "No evidence provided.",
+			},
+		},
+	}
+
+	report := GenerateMarkdownReport(res)
+	if !strings.Contains(report, "**Evidence:**\n\n```text\nDiff removes `Timeout: 10 * time.Second`.\n```") {
+		t.Errorf("expected single-line raw Evidence rendered in literal text fence in Markdown report, got:\n%s", report)
+	}
+	if !strings.Contains(report, "**Evidence:**\n\n```text\n+ **value**\n```") {
+		t.Errorf("expected single-line Markdown-like diff line '+ **value**' fenced as literal text, got:\n%s", report)
+	}
+	if strings.Count(report, "**Evidence:**") != 4 { // 2 in Findings + 2 in Ready-to-Copy Comments
+		t.Errorf("expected Evidence rendered 4 times (2 in Findings + 2 in Comments), got:\n%s", report)
+	}
+}
+
+func TestSaveReportToFile_WritesJSONAndHandlesCollisions(t *testing.T) {
+	tempDir := t.TempDir()
+	fixedTime := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+
+	res1 := &models.ReviewResult{
+		PRTitle:    "First Run",
+		Branch:     "feat/evidence",
+		BaseBranch: "main",
+		Verdict:    models.VerdictComment,
+		ReviewedAt: fixedTime,
+		Issues: []models.Issue{
+			{
+				Dimension: "Logic",
+				File:      "a.go",
+				LineStart: 1,
+				Severity:  models.SeverityBlocking,
+				Title:     "First issue",
+				Evidence:  "quoted diff line",
+			},
+		},
+	}
+	md1, err := SaveReportToFile(res1, tempDir)
+	if err != nil {
+		t.Fatalf("first SaveReportToFile failed: %v", err)
+	}
+	if filepath.Base(md1) != "2026-11-19-feat-evidence.md" {
+		t.Fatalf("expected 2026-11-19-feat-evidence.md, got %s", filepath.Base(md1))
+	}
+	json1 := filepath.Join(tempDir, "2026-11-19-feat-evidence.json")
+	if _, err := os.Stat(json1); err != nil {
+		t.Fatalf("expected sibling JSON file %s: %v", json1, err)
+	}
+
+	// Second run on the same date & branch must use -2 without clobbering the first
+	res2 := &models.ReviewResult{
+		PRTitle:    "Second Run",
+		Branch:     "feat/evidence",
+		BaseBranch: "main",
+		Verdict:    models.VerdictApprove,
+		ReviewedAt: fixedTime,
+	}
+	md2, err := SaveReportToFile(res2, tempDir)
+	if err != nil {
+		t.Fatalf("second SaveReportToFile failed: %v", err)
+	}
+	if filepath.Base(md2) != "2026-11-19-feat-evidence-2.md" {
+		t.Fatalf("expected 2026-11-19-feat-evidence-2.md, got %s", filepath.Base(md2))
+	}
+	json2 := filepath.Join(tempDir, "2026-11-19-feat-evidence-2.json")
+	if _, err := os.Stat(json2); err != nil {
+		t.Fatalf("expected sibling JSON file %s: %v", json2, err)
+	}
+
+	// Verify first JSON was NOT overwritten
+	firstJSONBytes, err := os.ReadFile(json1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(firstJSONBytes), "First Run") || !strings.Contains(string(firstJSONBytes), `"evidence": "quoted diff line"`) {
+		t.Errorf("first JSON was clobbered or missing evidence: %s", string(firstJSONBytes))
+	}
+
+	// Third run when only -3 is free must increment to -3
+	res3 := &models.ReviewResult{
+		PRTitle:    "Third Run",
+		Branch:     "feat/evidence",
+		BaseBranch: "main",
+		Verdict:    models.VerdictApprove,
+		ReviewedAt: fixedTime,
+	}
+	md3, err := SaveReportToFile(res3, tempDir)
+	if err != nil {
+		t.Fatalf("third SaveReportToFile failed: %v", err)
+	}
+	if filepath.Base(md3) != "2026-11-19-feat-evidence-3.md" {
+		t.Fatalf("expected 2026-11-19-feat-evidence-3.md, got %s", filepath.Base(md3))
+	}
+}
+
+func TestGenerateMarkdownReport_MultilineEvidenceFencing(t *testing.T) {
+	res := &models.ReviewResult{
+		PRTitle: "Multiline Evidence PR",
+		Branch:  "feat/ev-fence",
+		Verdict: models.VerdictRequestChanges,
+		Issues: []models.Issue{
+			{
+				Dimension:   "Logic",
+				File:        "client.go",
+				LineStart:   10,
+				Severity:    models.SeverityBlocking,
+				Title:       "Raw diff excerpt",
+				Description: "Timeout deleted.",
+				Evidence:    "- Timeout: 10 * time.Second\n+ Client{}",
+			},
+			{
+				Dimension:   "Logic",
+				File:        "auth.go",
+				LineStart:   20,
+				Severity:    models.SeverityBlocking,
+				Title:       "Already fenced excerpt",
+				Description: "Guard removed.",
+				Evidence:    "```diff\n- if !authed {\n-     return\n- }\n```",
+			},
+		},
+	}
+
+	report := GenerateMarkdownReport(res)
+	if !strings.Contains(report, "**Evidence:**\n\n```text\n- Timeout: 10 * time.Second\n+ Client{}\n```") {
+		t.Errorf("expected raw multiline evidence wrapped in ```text literal fence, got:\n%s", report)
+	}
+	if !strings.Contains(report, "**Evidence:**\n\n```diff\n- if !authed {\n-     return\n- }\n```") {
+		t.Errorf("expected pre-fenced evidence preserved without double-fencing, got:\n%s", report)
+	}
+	if strings.Contains(report, "```text\n```diff") {
+		t.Errorf("pre-fenced evidence must not be double-fenced:\n%s", report)
+	}
+
+	// Mixed excerpt (two fenced traces surrounding raw diff lines) + indented raw trace
+	resMixed := &models.ReviewResult{
+		PRTitle: "Mixed & Indented Evidence",
+		Branch:  "feat/ev-mixed",
+		Verdict: models.VerdictRequestChanges,
+		Issues: []models.Issue{
+			{
+				Dimension:   "Logic",
+				File:        "handler.go",
+				LineStart:   12,
+				Severity:    models.SeverityBlocking,
+				Title:       "Mixed fenced/raw trace",
+				Description: "Middle lines must remain literal.",
+				Evidence:    "```go\nfoo()\n```\n- removed line\n+ added line\n```go\nbar()\n```",
+			},
+			{
+				Dimension:   "Logic",
+				File:        "worker.go",
+				LineStart:   33,
+				Severity:    models.SeverityBlocking,
+				Title:       "Indented trace",
+				Description: "Leading indentation preserved.",
+				Evidence:    "    if err != nil {\n        return err\n    }",
+			},
+		},
+	}
+	mixedReport := GenerateMarkdownReport(resMixed)
+	if !strings.Contains(mixedReport, "**Evidence:**\n\n````text\n```go\nfoo()\n```\n- removed line\n+ added line\n```go\nbar()\n```\n````") {
+		t.Errorf("expected mixed excerpt wrapped completely in ````text fence, got:\n%s", mixedReport)
+	}
+	if !strings.Contains(mixedReport, "**Evidence:**\n\n```text\n    if err != nil {\n        return err\n    }\n```") {
+		t.Errorf("expected indented raw trace to keep leading 4 spaces on line 1, got:\n%s", mixedReport)
+	}
+}
+
+func TestSaveReportToFile_BoundsFilenameBytesWithJSONAndSuffix(t *testing.T) {
+	tempDir := t.TempDir()
+	fixedTime := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+
+	// 240-byte ASCII branch name exceeds 255 bytes once date prefix and .json extension (or -2 suffix) are added.
+	longASCII := strings.Repeat("a", 240)
+	for run := 1; run <= 3; run++ {
+		res := &models.ReviewResult{
+			PRTitle:    "Long Branch Test",
+			Branch:     longASCII,
+			BaseBranch: "main",
+			Verdict:    models.VerdictApprove,
+			ReviewedAt: fixedTime,
+		}
+		mdPath, err := SaveReportToFile(res, tempDir)
+		if err != nil {
+			t.Fatalf("run %d SaveReportToFile failed for 240-byte branch: %v", run, err)
+		}
+		mdBase := filepath.Base(mdPath)
+		jsonBase := strings.TrimSuffix(mdBase, ".md") + ".json"
+		if len(mdBase) > 255 || len(jsonBase) > 255 {
+			t.Errorf("run %d filename exceeded 255 bytes: md=%d json=%d", run, len(mdBase), len(jsonBase))
+		}
+		if _, statErr := os.Stat(filepath.Join(tempDir, jsonBase)); statErr != nil {
+			t.Errorf("run %d missing sibling JSON %s: %v", run, jsonBase, statErr)
+		}
+	}
+
+	// Also verify multi-byte UTF-8 branch truncation never splits a rune.
+	longUTF8 := strings.Repeat("é", 130) // 260 bytes
+	resUTF8 := &models.ReviewResult{
+		PRTitle:    "Long UTF8 Branch Test",
+		Branch:     longUTF8,
+		BaseBranch: "main",
+		Verdict:    models.VerdictApprove,
+		ReviewedAt: fixedTime,
+	}
+	mdUTF8, err := SaveReportToFile(resUTF8, tempDir)
+	if err != nil {
+		t.Fatalf("UTF8 SaveReportToFile failed: %v", err)
+	}
+	jsonUTF8 := strings.TrimSuffix(filepath.Base(mdUTF8), ".md") + ".json"
+	if len(jsonUTF8) > 255 {
+		t.Errorf("UTF8 json filename exceeded 255 bytes: %d", len(jsonUTF8))
+	}
+}

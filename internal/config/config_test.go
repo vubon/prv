@@ -371,3 +371,25 @@ review:
 		t.Error("expected error for malformed YAML bytes")
 	}
 }
+
+func TestLoadConfig_RequireEvidence(t *testing.T) {
+	if DefaultConfig().Review.RequireEvidence {
+		t.Fatal("expected DefaultConfig().Review.RequireEvidence to be false by default")
+	}
+
+	tempDir := t.TempDir()
+	yamlContent := `version: "1"
+review:
+  require_evidence: true
+`
+	if err := os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(yamlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if !cfg.Review.RequireEvidence {
+		t.Error("expected Review.RequireEvidence to be true when set in .prv.yaml")
+	}
+}

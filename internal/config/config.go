@@ -24,9 +24,10 @@ type ContextConfig struct {
 
 // ReviewConfig contains rules, sensitive paths, persona, and strictness.
 type ReviewConfig struct {
-	Persona           string           `yaml:"persona"`                  // e.g. "staff-advisory", "strict-linter", "mentor"
-	DefaultBaseBranch string           `yaml:"default_base_branch"`      // e.g. "main", "staging", "dev", "develop"
-	MaxDiffLines      int              `yaml:"max_diff_lines,omitempty"` // Optional diff line budget cap (0 = unlimited)
+	Persona           string           `yaml:"persona"`                    // e.g. "staff-advisory", "strict-linter", "mentor"
+	DefaultBaseBranch string           `yaml:"default_base_branch"`        // e.g. "main", "staging", "dev", "develop"
+	MaxDiffLines      int              `yaml:"max_diff_lines,omitempty"`   // Optional diff line budget cap (0 = unlimited)
+	RequireEvidence   bool             `yaml:"require_evidence,omitempty"` // Fail prv report when BLOCKING issues omit evidence
 	Strictness        StrictnessConfig `yaml:"strictness"`
 	SensitivePaths    []string         `yaml:"sensitive_paths"` // Directories requiring extra security scrutiny
 	CustomRules       []string         `yaml:"custom_rules"`    // Team rules injected into review prompts
@@ -275,6 +276,9 @@ review:
 
   # Maximum total diff lines to include in a bundle (0 = unlimited; truncates tests/docs before sensitive files)
   # max_diff_lines: 3000
+
+  # Require concrete evidence for BLOCKING issues in 'prv report' (default: false — warn only)
+  # require_evidence: false
 
   # Strictness settings for verdicts
   strictness:

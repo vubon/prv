@@ -222,6 +222,11 @@ prv report --file review_output.json --inline --post 42
 prv report --file review_output.json --copy
 ```
 
+Reports targeting a PR use the policy from its exact base commit in a matching checkout.
+Use `--config <path>` to supply an explicit policy when the base commit or checkout is unavailable.
+PR numbers use the repository configured in GitHub CLI. Pass a full PR URL to select a repository directly.
+If the JSON's `pr_url` and `pr_number` disagree, use `--pr` to select the target.
+
 ---
 
 ## 📋 Conventional Comments Standard
@@ -276,6 +281,7 @@ review:
   persona: "staff-advisory"
   # default_base_branch: "staging"
   # max_diff_lines: 3000
+  # require_evidence: false
 
   strictness:
     blocking_dimensions:
@@ -353,6 +359,9 @@ review:
 | | `--dirty, -w` | Generate walkthrough from working-tree and staged changes. |
 | | `--branch, -b` | Walkthrough for specific branch. |
 | `prv report` | `--file, -f` | Path to JSON review result file. |
+| | `--dir, -d` | Output directory for saved `.md` and `.json` reports (default: `reviews`). |
+| | `--strict-evidence` | Fail if any `BLOCKING` issue lacks an `evidence` string. |
+| | `--config` | Custom `.prv.yaml` path (e.g. for `require_evidence`). |
 | | `--post, -p` | Publish review report to GitHub PR. |
 | | `--inline, -i` | Include line-level inline diff comments. |
 | | `--copy, -c` | Copy comments to clipboard. |

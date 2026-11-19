@@ -120,14 +120,49 @@ func (g *GitRunner) GetRemoteURL() (string, error) {
 	return g.runCmd("config", "--get", "remote.origin.url")
 }
 
-// GetDefaultBaseBranch attempts to detect default base branch (symbolic-ref, main, master, develop, dev, staging).
+// FindRepoRemote returns a configured fetch remote for the given repository.
+func (g *GitRunner) FindRepoRemote(host, owner, repo string) (string, error) {
+	remotes, err := g.runCmd("remote")
+	if err != nil {
+		return "", err
+	}
+	for _, remote := range strings.Fields(remotes) {
+		fetchURL, err := g.runCmd("remote", "get-url", "--", remote)
+		if err != nil {
+			continue
+		}
+		// A local mirror can still represent the GitHub repository named in the original URL.
+		if filepath.IsAbs(fetchURL) || strings.HasPrefix(fetchURL, "file://") {
+			urls, err := g.runCmd("config", "--get-all", "remote."+remote+".url")
+			if err != nil {
+				continue
+			}
+			fetchURL, _, _ = strings.Cut(urls, "\n")
+		}
+		remoteHost, remoteOwner, remoteRepo, err := ParseRemoteHostAndSlug(fetchURL)
+		if err == nil && strings.EqualFold(host, remoteHost) &&
+			strings.EqualFold(owner, remoteOwner) && strings.EqualFold(repo, remoteRepo) {
+			return remote, nil
+		}
+	}
+	return "", fmt.Errorf("no configured remote matches %s/%s/%s", host, owner, repo)
+}
+
+// GetDefaultBaseBranch returns the detected default base or main for callers that need a branch name.
 func (g *GitRunner) GetDefaultBaseBranch() string {
+	if branch := g.DetectDefaultBaseBranch(); branch != "" {
+		return branch
+	}
+	return "main"
+}
+
+// DetectDefaultBaseBranch returns the remote default or a conventional base present locally.
+func (g *GitRunner) DetectDefaultBaseBranch() string {
 	// Try origin HEAD symbolic ref
 	ref, err := g.runCmd("symbolic-ref", "refs/remotes/origin/HEAD")
 	if err == nil && ref != "" {
-		parts := strings.Split(ref, "/")
-		if len(parts) > 0 {
-			return parts[len(parts)-1]
+		if branch, ok := strings.CutPrefix(ref, "refs/remotes/origin/"); ok && branch != "" {
+			return branch
 		}
 	}
 
@@ -142,7 +177,7 @@ func (g *GitRunner) GetDefaultBaseBranch() string {
 		}
 	}
 
-	return "main"
+	return ""
 }
 
 // FetchOrigin runs git fetch with a 15-second timeout and disables interactive terminal prompts.
@@ -254,6 +289,15 @@ func (g *GitRunner) ResolveBaseRevision(baseBranch string) (refName string, comm
 		if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
 			return baseBranch, strings.TrimSpace(sha), nil
 		}
+		branch, ok := strings.CutPrefix(baseBranch, "refs/remotes/origin/")
+		if !ok {
+			branch, ok = strings.CutPrefix(baseBranch, "origin/")
+		}
+		if ok && branch != "" && branch != "HEAD" && g.fetchOriginBase(branch) == nil {
+			if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
+				return baseBranch, strings.TrimSpace(sha), nil
+			}
+		}
 		return "", "", fmt.Errorf("revision %q not found locally", baseBranch)
 	}
 
@@ -267,8 +311,7 @@ func (g *GitRunner) ResolveBaseRevision(baseBranch string) (refName string, comm
 		return baseBranch, strings.TrimSpace(sha), nil
 	}
 
-	// Attempt to fetch origin in case baseBranch was created or updated remotely (15s timeout, non-interactive)
-	_, _ = g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", baseBranch)
+	_ = g.fetchOriginBase(baseBranch)
 	if sha, err := g.runCmd("rev-parse", "--verify", "origin/"+baseBranch+"^{commit}"); err == nil {
 		return "origin/" + baseBranch, strings.TrimSpace(sha), nil
 	}
@@ -277,6 +320,13 @@ func (g *GitRunner) ResolveBaseRevision(baseBranch string) (refName string, comm
 	}
 
 	return "", "", fmt.Errorf("base branch '%s' not found locally or on remote origin (checked '%s' and 'origin/%s')", baseBranch, baseBranch, baseBranch)
+}
+
+func (g *GitRunner) fetchOriginBase(branch string) error {
+	// Map the requested branch even when the clone tracks only one branch.
+	_, err := g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch",
+		"--refmap=+refs/heads/*:refs/remotes/origin/*", "--", "origin", branch)
+	return err
 }
 
 // ResolveHeadCommit resolves headBranch (preferring local branch or HEAD, then origin/<headBranch>)
@@ -345,8 +395,8 @@ func (g *GitRunner) resolveCommitRef(ref string) string {
 		return ""
 	}
 	if isHexCommitID(ref) {
-		if _, err := g.runCmd("rev-parse", "--verify", ref+"^{commit}"); err == nil {
-			return ref
+		if sha, err := g.runCmd("rev-parse", "--verify", ref+"^{commit}"); err == nil && strings.EqualFold(sha, ref) {
+			return sha
 		}
 		return ""
 	}
@@ -372,10 +422,15 @@ func (g *GitRunner) RefExists(ref string) bool {
 
 // FetchCommit attempts to fetch an exact commit object from origin (15s timeout, non-interactive).
 func (g *GitRunner) FetchCommit(sha string) error {
+	return g.FetchCommitFromRemote("origin", sha)
+}
+
+// FetchCommitFromRemote fetches an exact commit object from a configured remote.
+func (g *GitRunner) FetchCommitFromRemote(remote, sha string) error {
 	if !isHexCommitID(sha) {
 		return fmt.Errorf("invalid commit sha %q", sha)
 	}
-	_, err := g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", sha)
+	_, err := g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "--", remote, sha)
 	return err
 }
 

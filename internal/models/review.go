@@ -35,6 +35,7 @@ type Issue struct {
 	Severity    string `json:"severity"` // BLOCKING, MAJOR, MINOR, NIT
 	Title       string `json:"title"`
 	Description string `json:"description"`
+	Evidence    string `json:"evidence,omitempty"` // Repro input/trace, command output, or quoted offending diff lines
 	CodeSnippet string `json:"code_snippet,omitempty"`
 	Suggestion  string `json:"suggestion,omitempty"`
 }

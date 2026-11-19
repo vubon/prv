@@ -191,3 +191,38 @@ func TestGenerateInlineComments_MultiLine(t *testing.T) {
 		t.Errorf("expected Line=384, LineEnd=390, got Line=%d, LineEnd=%d", comments[0].Line, comments[0].LineEnd)
 	}
 }
+
+func TestFormatConventionalComment_WithEvidence(t *testing.T) {
+	single := FormatConventionalComment(models.Issue{
+		Dimension:   "Logic",
+		Severity:    models.SeverityBlocking,
+		Title:       "Unchecked nil",
+		Description: "Pointer may be nil.",
+		Evidence:    "+ **value**",
+	})
+	if !strings.Contains(single, "**Evidence:**\n\n```text\n+ **value**\n```") {
+		t.Errorf("expected single-line raw Evidence fenced as literal text in conventional comment, got:\n%s", single)
+	}
+
+	multi := FormatConventionalComment(models.Issue{
+		Dimension:   "Security",
+		Severity:    models.SeverityBlocking,
+		Title:       "Bypass",
+		Description: "Auth check removed.",
+		Evidence:    "```diff\n- if !isAdmin {\n-     return ErrForbidden\n- }\n```",
+	})
+	if !strings.Contains(multi, "**Evidence:**\n\n```diff\n") {
+		t.Errorf("expected multi-line Evidence block in conventional comment, got:\n%s", multi)
+	}
+
+	rawMulti := FormatConventionalComment(models.Issue{
+		Dimension:   "Logic",
+		Severity:    models.SeverityBlocking,
+		Title:       "Timeout dropped",
+		Description: "Diff removed timeout.",
+		Evidence:    "- Timeout: 5 * time.Second\n+ Client{}",
+	})
+	if !strings.Contains(rawMulti, "**Evidence:**\n\n```text\n- Timeout: 5 * time.Second\n+ Client{}\n```") {
+		t.Errorf("expected raw multi-line Evidence fenced as text, got:\n%s", rawMulti)
+	}
+}

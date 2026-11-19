@@ -232,6 +232,10 @@ func runBundle(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --dirty and --pr\n")
 		os.Exit(1)
 	}
+	if base != "" && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --base and --pr\n")
+		os.Exit(1)
+	}
 	if staged && dirty {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --dirty\n")
 		os.Exit(1)
@@ -478,6 +482,10 @@ func runDiagram(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --dirty and --pr\n")
 		os.Exit(1)
 	}
+	if base != "" && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --base and --pr\n")
+		os.Exit(1)
+	}
 	if staged && dirty {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --staged and --dirty\n")
 		os.Exit(1)
@@ -565,6 +573,10 @@ func runWalkthrough(args []string) {
 	}
 	if dirty && prID != "" {
 		fmt.Fprintf(os.Stderr, "Error: cannot specify both --dirty and --pr\n")
+		os.Exit(1)
+	}
+	if base != "" && prID != "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot specify both --base and --pr\n")
 		os.Exit(1)
 	}
 	if staged && dirty {

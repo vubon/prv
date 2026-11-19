@@ -30,7 +30,14 @@ type ReviewConfig struct {
 	Strictness        StrictnessConfig `yaml:"strictness"`
 	SensitivePaths    []string         `yaml:"sensitive_paths"` // Directories requiring extra security scrutiny
 	CustomRules       []string         `yaml:"custom_rules"`    // Team rules injected into review prompts
+	Rules             RulesConfig      `yaml:"rules,omitempty"` // Structured invariant rules (forbidden vs mandated)
 	IgnorePatterns    []string         `yaml:"ignore_patterns"` // Extra file glob patterns to filter out
+}
+
+// RulesConfig holds structured team engineering invariants split by enforcement severity.
+type RulesConfig struct {
+	Forbidden []string `yaml:"forbidden,omitempty"` // Zero-tolerance anti-patterns (NEVER)
+	Mandated  []string `yaml:"mandated,omitempty"`  // Required engineering conventions (ALWAYS)
 }
 
 // StrictnessConfig defines blocking criteria for review verdicts.
@@ -98,9 +105,14 @@ func LoadConfig(repoPath string, customConfigPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file %s: %w", configPath, err)
 	}
 
+	return ParseConfigBytes(data, configPath)
+}
+
+// ParseConfigBytes unmarshals and normalizes raw .prv.yaml bytes into a Config.
+func ParseConfigBytes(data []byte, sourceName string) (*Config, error) {
 	cfg := DefaultConfig()
 	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse yaml config in %s: %w", configPath, err)
+		return nil, fmt.Errorf("failed to parse yaml config in %s: %w", sourceName, err)
 	}
 
 	// Apply sensible fallbacks if empty
@@ -116,8 +128,34 @@ func LoadConfig(repoPath string, customConfigPath string) (*Config, error) {
 	if cfg.Review.MaxDiffLines < 0 {
 		cfg.Review.MaxDiffLines = 0
 	}
+	cfg.Review.Rules.Forbidden = normalizeRuleList(cfg.Review.Rules.Forbidden)
+	cfg.Review.Rules.Mandated = normalizeRuleList(cfg.Review.Rules.Mandated)
 
 	return cfg, nil
+}
+
+// normalizeRuleList trims whitespace, removes blank entries, and deduplicates rule strings while preserving order.
+func normalizeRuleList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // MatchesPath checks if a given file path matches a glob or recursive glob pattern (e.g. "internal/auth/**", "**/*.sql", "**/mocks/**").
@@ -263,6 +301,15 @@ review:
     - "External HTTP/RPC calls must carry an explicit context with timeout"
     - "Exported Go errors must be wrapped with %%w"
     - "No raw goroutines; manage concurrency through worker pools or errgroup"
+
+  # Structured invariant rules (optional; renders Forbidden vs Mandated sections in bundle)
+  # rules:
+  #   forbidden:
+  #     - "NEVER use string concatenation or fmt.Sprintf for SQL queries"
+  #     - "NEVER invoke time.Sleep in production goroutines"
+  #   mandated:
+  #     - "ALWAYS wrap exported Go errors with %%w"
+  #     - "ALWAYS add unit tests for new flags and parsers"
 
   # Additional file globs to ignore during diff bundling
   # (Note: lockfiles, *.pb.go, *_generated.go, and minified assets are already ignored by default)

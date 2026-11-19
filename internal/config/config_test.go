@@ -282,3 +282,92 @@ func TestWriteDefaultConfig_InvalidContextDirRejected(t *testing.T) {
 		t.Error("expected error when contextDir escapes repository root")
 	}
 }
+
+func TestLoadConfig_RulesForbiddenAndMandated(t *testing.T) {
+	tempDir := t.TempDir()
+	yamlContent := `version: "1"
+review:
+  custom_rules:
+    - "Legacy rule kept separate"
+  rules:
+    forbidden:
+      - "  NEVER build SQL with string concatenation  "
+      - ""
+      - "NEVER build SQL with string concatenation"
+      - "NEVER call time.Sleep in goroutines"
+    mandated:
+      - "ALWAYS wrap errors with %w"
+      - "   "
+      - "ALWAYS wrap errors with %w"
+`
+	configPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("failed to write test yaml: %v", err)
+	}
+
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if len(cfg.Review.CustomRules) != 1 || cfg.Review.CustomRules[0] != "Legacy rule kept separate" {
+		t.Errorf("expected custom_rules to remain separate and untouched, got: %v", cfg.Review.CustomRules)
+	}
+	if len(cfg.Review.Rules.Forbidden) != 2 ||
+		cfg.Review.Rules.Forbidden[0] != "NEVER build SQL with string concatenation" ||
+		cfg.Review.Rules.Forbidden[1] != "NEVER call time.Sleep in goroutines" {
+		t.Errorf("unexpected normalized forbidden rules: %v", cfg.Review.Rules.Forbidden)
+	}
+	if len(cfg.Review.Rules.Mandated) != 1 || cfg.Review.Rules.Mandated[0] != "ALWAYS wrap errors with %w" {
+		t.Errorf("unexpected normalized mandated rules: %v", cfg.Review.Rules.Mandated)
+	}
+}
+
+func TestLoadConfig_RulesBlankOnlyBecomesNil(t *testing.T) {
+	tempDir := t.TempDir()
+	yamlContent := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "   "
+      - ""
+`
+	configPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("failed to write test yaml: %v", err)
+	}
+
+	cfg, err := LoadConfig(tempDir, "")
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if len(cfg.Review.Rules.Forbidden) != 0 {
+		t.Errorf("expected blank-only rules to normalize to empty slice, got: %v", cfg.Review.Rules.Forbidden)
+	}
+}
+
+func TestParseConfigBytes(t *testing.T) {
+	raw := []byte(`version: "1"
+review:
+  rules:
+    forbidden:
+      - "  NEVER log secrets  "
+      - "NEVER log secrets"
+    mandated:
+      - "ALWAYS wrap errors with %w"
+`)
+	cfg, err := ParseConfigBytes(raw, "HEAD:.prv.yaml")
+	if err != nil {
+		t.Fatalf("ParseConfigBytes failed: %v", err)
+	}
+	if len(cfg.Review.Rules.Forbidden) != 1 || cfg.Review.Rules.Forbidden[0] != "NEVER log secrets" {
+		t.Errorf("unexpected forbidden rules: %v", cfg.Review.Rules.Forbidden)
+	}
+	if len(cfg.Review.Rules.Mandated) != 1 || cfg.Review.Rules.Mandated[0] != "ALWAYS wrap errors with %w" {
+		t.Errorf("unexpected mandated rules: %v", cfg.Review.Rules.Mandated)
+	}
+
+	if _, err := ParseConfigBytes([]byte("review:\n  rules: [invalid"), "HEAD:.prv.yaml"); err == nil {
+		t.Error("expected error for malformed YAML bytes")
+	}
+}

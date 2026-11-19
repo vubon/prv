@@ -347,23 +347,36 @@ func TestBundler_PrepareBundle_CustomBaseBranch(t *testing.T) {
 		t.Errorf("expected 1 file change 'feature.go', got %v", ctx.Files)
 	}
 
-	// Test 2: default_base_branch from .prv.yaml config
+	// Test 2: Uncommitted default_base_branch in working tree does NOT redirect implicit base (remains repo default 'main')
 	cfgContent := `version: "1"
 review:
   default_base_branch: "staging"
 `
-	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(cfgContent), 0644)
+	cfgPath := filepath.Join(tempDir, ".prv.yaml")
+	_ = os.WriteFile(cfgPath, []byte(cfgContent), 0644)
 
-	optsDefault := models.BundleOptions{
+	optsImplicit := models.BundleOptions{
 		RepoPath: tempDir,
 	}
-	ctxDefault, err := bundler.PrepareBundle(optsDefault)
+	ctxImplicit, err := bundler.PrepareBundle(optsImplicit)
 	if err != nil {
-		t.Fatalf("PrepareBundle with config default_base_branch failed: %v", err)
+		t.Fatalf("PrepareBundle with implicit base failed: %v", err)
+	}
+	if ctxImplicit.Metadata.BaseBranch != "main" {
+		t.Errorf("expected BaseBranch to remain committed repository default 'main', got %q", ctxImplicit.Metadata.BaseBranch)
 	}
 
-	if ctxDefault.Metadata.BaseBranch != "staging" {
-		t.Errorf("expected BaseBranch from config to be 'staging', got %q", ctxDefault.Metadata.BaseBranch)
+	// Test 3: Explicit --config honors default_base_branch from specified configuration
+	optsExplicitConfig := models.BundleOptions{
+		RepoPath:   tempDir,
+		ConfigPath: cfgPath,
+	}
+	ctxExplicitConfig, err := bundler.PrepareBundle(optsExplicitConfig)
+	if err != nil {
+		t.Fatalf("PrepareBundle with explicit --config failed: %v", err)
+	}
+	if ctxExplicitConfig.Metadata.BaseBranch != "staging" {
+		t.Errorf("expected BaseBranch from explicit config to be 'staging', got %q", ctxExplicitConfig.Metadata.BaseBranch)
 	}
 }
 
@@ -685,5 +698,638 @@ func TestBundler_PrepareBundle_MaxDiffLinesAndTruncatedMarkdown(t *testing.T) {
 	md := bundler.ToMarkdown(ctx)
 	if !strings.Contains(md, "Diff Budget:") || !strings.Contains(md, "`[TRUNCATED]`") {
 		t.Errorf("expected Diff Budget summary and [TRUNCATED] badge in markdown, got:\n%s", md)
+	}
+}
+
+func TestBundler_ToMarkdownAndJSON_InvariantRules(t *testing.T) {
+	bundler := NewBundler(".")
+	cfg := config.DefaultConfig()
+	cfg.Review.CustomRules = []string{"Legacy custom rule"}
+	cfg.Review.Rules = config.RulesConfig{
+		Forbidden: []string{"NEVER build SQL with fmt.Sprintf"},
+		Mandated:  []string{"ALWAYS wrap exported errors with %w"},
+	}
+
+	meta := &models.PRMetadata{
+		Title:      "Invariant Rules PR",
+		HeadBranch: "feat/rules",
+		BaseBranch: "main",
+	}
+	ctx := bundler.buildContext(meta, nil, nil, cfg)
+
+	md := bundler.ToMarkdown(ctx)
+	for _, want := range []string{
+		"## 📋 Team Engineering Standards & Custom Rules (`.prv.yaml`)",
+		"- Legacy custom rule",
+		"### 🚫 Forbidden Anti-Patterns",
+		"`BLOCKING` finding",
+		"added or deleted lines",
+		"- NEVER build SQL with fmt.Sprintf",
+		"### ✅ Mandated Conventions",
+		"`MAJOR` issue",
+		"- ALWAYS wrap exported errors with %w",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("expected %q in markdown bundle, got:\n%s", want, md)
+		}
+	}
+
+	jsonOut, err := bundler.ToJSON(ctx)
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+	var parsed models.PRContext
+	if err := json.Unmarshal([]byte(jsonOut), &parsed); err != nil {
+		t.Fatalf("failed to unmarshal ToJSON output: %v", err)
+	}
+	if parsed.RulePolicy == nil || parsed.RulePolicy.Forbidden == nil || parsed.RulePolicy.Mandated == nil {
+		t.Fatalf("expected non-nil RulePolicy for forbidden and mandated tiers, got: %+v", parsed.RulePolicy)
+	}
+	if parsed.RulePolicy.Forbidden.Severity != models.SeverityBlocking {
+		t.Errorf("expected forbidden severity BLOCKING, got %q", parsed.RulePolicy.Forbidden.Severity)
+	}
+	if !strings.Contains(parsed.RulePolicy.Forbidden.EvidenceRequirement, "added or deleted lines") {
+		t.Errorf("expected forbidden evidence requirement in JSON, got %q", parsed.RulePolicy.Forbidden.EvidenceRequirement)
+	}
+	if parsed.RulePolicy.Mandated.Severity != models.SeverityMajor {
+		t.Errorf("expected mandated severity MAJOR, got %q", parsed.RulePolicy.Mandated.Severity)
+	}
+	if parsed.RulePolicy.Mandated.EvidenceRequirement != "" {
+		t.Errorf("expected empty evidence_requirement for mandated tier, got %q", parsed.RulePolicy.Mandated.EvidenceRequirement)
+	}
+
+	// Zero-regression check: without rules.forbidden / rules.mandated, JSON omits them and subsections are absent
+	legacyCfg := config.DefaultConfig()
+	legacyCfg.Review.CustomRules = []string{"Legacy only"}
+	legacyCtx := bundler.buildContext(meta, nil, nil, legacyCfg)
+	legacyMD := bundler.ToMarkdown(legacyCtx)
+	if strings.Contains(legacyMD, "Forbidden Anti-Patterns") || strings.Contains(legacyMD, "Mandated Conventions") {
+		t.Errorf("expected no invariant subsections when rules are empty, got:\n%s", legacyMD)
+	}
+	legacyJSON, err := bundler.ToJSON(legacyCtx)
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+	if strings.Contains(legacyJSON, "forbidden_rules") || strings.Contains(legacyJSON, "mandated_rules") || strings.Contains(legacyJSON, "rule_policy") {
+		t.Errorf("expected empty invariant rules and rule_policy to be omitted from JSON, got:\n%s", legacyJSON)
+	}
+}
+
+func TestBundler_PrepareBundle_BaseRevisionConfigAndOverride(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	baseYAML := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "NEVER drop HTTP client timeouts"
+    mandated:
+      - "ALWAYS wrap errors with %w"
+`
+	cfgPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(cfgPath, []byte(baseYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "baseline config on main")
+
+	// Branch tries to weaken rules by deleting forbidden list
+	runGitInDir(t, tempDir, "checkout", "-b", "feat/weaken-rules")
+	weakenedYAML := `version: "1"
+review:
+  rules:
+    forbidden: []
+    mandated: []
+`
+	if err := os.WriteFile(cfgPath, []byte(weakenedYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "client.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, tempDir, "add", ".prv.yaml", "client.go")
+	runGitInDir(t, tempDir, "commit", "-m", "weaken rules")
+
+	bundler := NewBundler(tempDir)
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath:   tempDir,
+		Branch:     "feat/weaken-rules",
+		BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle failed: %v", err)
+	}
+
+	if len(ctx.ForbiddenRules) != 1 || ctx.ForbiddenRules[0] != "NEVER drop HTTP client timeouts" {
+		t.Fatalf("expected base revision forbidden rule to be enforced, got: %v", ctx.ForbiddenRules)
+	}
+	if len(ctx.MandatedRules) != 1 || ctx.MandatedRules[0] != "ALWAYS wrap errors with %w" {
+		t.Fatalf("expected base revision mandated rule to be enforced, got: %v", ctx.MandatedRules)
+	}
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "Configuration file `.prv.yaml` was modified in this change") {
+		t.Errorf("expected config modification caution notice in markdown, got:\n%s", md)
+	}
+
+	// Working-tree --dirty test on main: deleting .prv.yaml on disk still enforces HEAD's forbidden rule
+	runGitInDir(t, tempDir, "checkout", "main")
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	dirtyCtx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath: tempDir,
+		Dirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle --dirty failed: %v", err)
+	}
+	if len(dirtyCtx.ForbiddenRules) != 1 || dirtyCtx.ForbiddenRules[0] != "NEVER drop HTTP client timeouts" {
+		t.Fatalf("expected HEAD revision forbidden rule to be enforced after deleting disk .prv.yaml, got: %v", dirtyCtx.ForbiddenRules)
+	}
+	runGitInDir(t, tempDir, "checkout", "--", ".prv.yaml")
+
+	// Explicit --config override must win over base revision rules
+	overridePath := filepath.Join(t.TempDir(), "override.yaml")
+	overrideYAML := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "NEVER use explicit override test violation"
+`
+	if err := os.WriteFile(overridePath, []byte(overrideYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	overrideCtx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath:   tempDir,
+		Branch:     "feat/weaken-rules",
+		BaseBranch: "main",
+		ConfigPath: overridePath,
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle with --config override failed: %v", err)
+	}
+	if len(overrideCtx.ForbiddenRules) != 1 || overrideCtx.ForbiddenRules[0] != "NEVER use explicit override test violation" {
+		t.Fatalf("expected explicit --config override to take precedence over base revision, got: %v", overrideCtx.ForbiddenRules)
+	}
+}
+
+func TestBundler_PrepareBundle_BrokenWorkingTreeYAML_DirtySucceeds(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	baseYAML := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "NEVER skip tests"
+`
+	cfgPath := filepath.Join(tempDir, ".prv.yaml")
+	if err := os.WriteFile(cfgPath, []byte(baseYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "add valid config")
+
+	// Developer makes a syntax error in .prv.yaml while writing uncommitted changes
+	brokenYAML := `version: "1"
+review:
+  rules: [this is invalid yaml: {broken
+`
+	if err := os.WriteFile(cfgPath, []byte(brokenYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(tempDir, "work.go"), []byte("package work\n"), 0644)
+
+	bundler := NewBundler(tempDir)
+	// Preparing dirty bundle should not crash on the working-tree syntax error because HEAD has valid config
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath: tempDir,
+		Dirty:    true,
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle --dirty failed unexpectedly on broken working-tree YAML: %v", err)
+	}
+	if len(ctx.ForbiddenRules) != 1 || ctx.ForbiddenRules[0] != "NEVER skip tests" {
+		t.Errorf("expected HEAD's forbidden rule to be loaded, got %v", ctx.ForbiddenRules)
+	}
+}
+
+func TestBundler_ModifiedConfigCaution_RenamedAndFiltered(t *testing.T) {
+	bundler := NewBundler(".")
+
+	// Test 1: Renamed from .prv.yaml to .prv.yaml.bak
+	renamedFiles := []models.FileChange{
+		{
+			OldPath: ".prv.yaml",
+			Path:    ".prv.yaml.bak",
+			Status:  "renamed",
+		},
+	}
+	ctxRenamed := bundler.buildContext(&models.PRMetadata{Title: "Rename Test"}, renamedFiles, nil, config.DefaultConfig())
+	if ctxRenamed.ModifiedConfigFile != ".prv.yaml" {
+		t.Errorf("expected ModifiedConfigFile '.prv.yaml', got %q", ctxRenamed.ModifiedConfigFile)
+	}
+	mdRenamed := bundler.ToMarkdown(ctxRenamed)
+	if !strings.Contains(mdRenamed, "Configuration file `.prv.yaml` was modified in this change") {
+		t.Errorf("expected caution for renamed config in markdown, got:\n%s", mdRenamed)
+	}
+
+	// Test 2: .prv.yaml ignored by *.yaml ignore pattern
+	filteredFiles := []models.FileChange{
+		{
+			Path:   ".prv.yaml",
+			Status: "modified",
+		},
+	}
+	cfgWithIgnore := config.DefaultConfig()
+	cfgWithIgnore.Review.IgnorePatterns = []string{"*.yaml"}
+	ctxFiltered := bundler.buildContext(&models.PRMetadata{Title: "Filtered Config Test"}, filteredFiles, nil, cfgWithIgnore)
+	if ctxFiltered.ModifiedConfigFile != ".prv.yaml" {
+		t.Errorf("expected ModifiedConfigFile '.prv.yaml' even when ignored, got %q", ctxFiltered.ModifiedConfigFile)
+	}
+	mdFiltered := bundler.ToMarkdown(ctxFiltered)
+	if !strings.Contains(mdFiltered, "Configuration file `.prv.yaml` was modified in this change") {
+		t.Errorf("expected caution for filtered config in markdown, got:\n%s", mdFiltered)
+	}
+}
+
+func TestBundler_UnbornHEAD_IgnoresWorkingTreeConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+
+	// Write uncommitted .prv.yaml in working tree
+	uncommittedYAML := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "UNCOMMITTED RULE SHOULD NOT BE LOADED"
+`
+	if err := os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(uncommittedYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundler := NewBundler(tempDir)
+	// Without explicit --config, unborn HEAD must return DefaultConfig (Finding P2.4)
+	cfg, _, err := bundler.resolveBaseConfig("HEAD", nil, models.BundleOptions{RepoPath: tempDir})
+	if err != nil {
+		t.Fatalf("resolveBaseConfig failed: %v", err)
+	}
+	if len(cfg.Review.Rules.Forbidden) != 0 {
+		t.Fatalf("expected 0 forbidden rules from unborn HEAD without --config, got: %v", cfg.Review.Rules.Forbidden)
+	}
+
+	// With explicit --config, explicitCfg is honored
+	explicitPath := filepath.Join(tempDir, ".prv.yaml")
+	explicitCfg, err := config.LoadConfig(tempDir, explicitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgExplicit, _, err := bundler.resolveBaseConfig("HEAD", explicitCfg, models.BundleOptions{RepoPath: tempDir, ConfigPath: explicitPath})
+	if err != nil {
+		t.Fatalf("resolveBaseConfig with explicit cfg failed: %v", err)
+	}
+	if len(cfgExplicit.Review.Rules.Forbidden) != 1 || cfgExplicit.Review.Rules.Forbidden[0] != "UNCOMMITTED RULE SHOULD NOT BE LOADED" {
+		t.Fatalf("expected explicit config to be honored on unborn HEAD, got: %v", cfgExplicit.Review.Rules.Forbidden)
+	}
+}
+
+func TestBundler_ModifiedSymlinkTarget_TriggersCaution(t *testing.T) {
+	bundler := NewBundler(".")
+
+	// When a symlink target (e.g. configs/team-rules.yaml) is modified in the diff (Finding P3.5)
+	symlinkTargetFiles := []models.FileChange{
+		{
+			Path:   "configs/team-rules.yaml",
+			Status: "modified",
+		},
+	}
+	ctx := bundler.buildContext(&models.PRMetadata{Title: "Symlink Target Edit"}, symlinkTargetFiles, nil, config.DefaultConfig(), "configs/team-rules.yaml")
+	if ctx.ModifiedConfigFile != "configs/team-rules.yaml" {
+		t.Fatalf("expected ModifiedConfigFile 'configs/team-rules.yaml', got %q", ctx.ModifiedConfigFile)
+	}
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "Configuration file `configs/team-rules.yaml` was modified in this change") {
+		t.Fatalf("expected caution in markdown for modified symlink target, got:\n%s", md)
+	}
+}
+
+func TestBundler_isLocalRepoMatchWithMeta(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "remote", "add", "origin", "git@github.com:myorg/myrepo.git")
+
+	bundler := NewBundler(tempDir)
+
+	// Matching host and slug (Finding P2.2)
+	matchMeta := &models.PRMetadata{
+		Repo: "myorg/myrepo",
+		URL:  "https://github.com/myorg/myrepo/pull/42",
+	}
+	if !bundler.isLocalRepoMatchWithMeta(matchMeta) {
+		t.Errorf("expected true for matching repo, got false")
+	}
+
+	// Mismatched org/repo
+	mismatchMeta := &models.PRMetadata{
+		Repo: "otherorg/otherrepo",
+		URL:  "https://github.com/otherorg/otherrepo/pull/42",
+	}
+	if bundler.isLocalRepoMatchWithMeta(mismatchMeta) {
+		t.Errorf("expected false for mismatched repo, got true")
+	}
+
+	// Mismatched host (GitHub enterprise vs github.com)
+	mismatchHostMeta := &models.PRMetadata{
+		Repo: "myorg/myrepo",
+		URL:  "https://ghe.company.internal/myorg/myrepo/pull/42",
+	}
+	if bundler.isLocalRepoMatchWithMeta(mismatchHostMeta) {
+		t.Errorf("expected false for mismatched host, got true")
+	}
+}
+
+func TestBundler_PinPRBaseCommit(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "remote", "add", "origin", "git@github.com:test/repo.git")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	// Base commit 1 with initial rule (Finding P2.1)
+	yaml1 := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "RULE AT COMMIT 1"
+`
+	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(yaml1), 0644)
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "commit 1")
+	commit1 := strings.TrimSpace(runGitInDir(t, tempDir, "rev-parse", "HEAD"))
+
+	// Base commit 2 with changed rule
+	yaml2 := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "RULE AT COMMIT 2"
+`
+	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(yaml2), 0644)
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "commit 2")
+
+	bundler := NewBundler(tempDir)
+
+	// If PR targets BaseCommit commit1, resolveBaseConfig resolves rules from commit1
+	cfg, _, err := bundler.resolveBaseConfig(commit1, nil, models.BundleOptions{RepoPath: tempDir})
+	if err != nil {
+		t.Fatalf("resolveBaseConfig for commit1 failed: %v", err)
+	}
+	if len(cfg.Review.Rules.Forbidden) != 1 || cfg.Review.Rules.Forbidden[0] != "RULE AT COMMIT 1" {
+		t.Fatalf("expected rules from commit1, got: %v", cfg.Review.Rules.Forbidden)
+	}
+
+	// If PR targets main tip, resolves rules from commit2
+	cfgTip, _, err := bundler.resolveBaseConfig("main", nil, models.BundleOptions{RepoPath: tempDir})
+	if err != nil {
+		t.Fatalf("resolveBaseConfig for main failed: %v", err)
+	}
+	if len(cfgTip.Review.Rules.Forbidden) != 1 || cfgTip.Review.Rules.Forbidden[0] != "RULE AT COMMIT 2" {
+		t.Fatalf("expected rules from commit2, got: %v", cfgTip.Review.Rules.Forbidden)
+	}
+}
+
+func TestBundler_HonorBaseFlag_WithDifferentPRTarget(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	// Commit on main with rule MAIN
+	yamlMain := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "RULE MAIN"
+`
+	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(yamlMain), 0644)
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "main baseline")
+
+	// Branch staging from main, with rule STAGING
+	runGitInDir(t, tempDir, "checkout", "-b", "staging")
+	yamlStaging := `version: "1"
+review:
+  rules:
+    forbidden:
+      - "RULE STAGING"
+`
+	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(yamlStaging), 0644)
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "staging config")
+	stagingSHA := strings.TrimSpace(runGitInDir(t, tempDir, "rev-parse", "HEAD"))
+
+	// Branch feat/work from staging
+	runGitInDir(t, tempDir, "checkout", "-b", "feat/work")
+	_ = os.WriteFile(filepath.Join(tempDir, "work.go"), []byte("package main\nfunc Work(){}\n"), 0644)
+	runGitInDir(t, tempDir, "add", "work.go")
+	runGitInDir(t, tempDir, "commit", "-m", "add work")
+
+	bundler := NewBundler(tempDir)
+	// Even if a PR metadata targeted main, passing explicit BaseBranch: "staging" must use staging (Finding 1)
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath:   tempDir,
+		Branch:     "feat/work",
+		BaseBranch: "staging",
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle failed: %v", err)
+	}
+
+	if ctx.Metadata.BaseBranch != "staging" {
+		t.Errorf("expected BaseBranch 'staging', got %q", ctx.Metadata.BaseBranch)
+	}
+	if ctx.Metadata.BaseCommit != stagingSHA {
+		t.Errorf("expected BaseCommit to match staging %s, got %s", stagingSHA, ctx.Metadata.BaseCommit)
+	}
+	if len(ctx.ForbiddenRules) != 1 || ctx.ForbiddenRules[0] != "RULE STAGING" {
+		t.Errorf("expected staging rules, got: %v", ctx.ForbiddenRules)
+	}
+}
+
+func TestBundler_ModifiedConfigCaution_SubdirectoryAndDirectorySymlink(t *testing.T) {
+	bundler := NewBundler(".")
+
+	// Case A: Diff touches services/.prv.yml from services/ (Finding 5)
+	subdirFiles := []models.FileChange{
+		{
+			Path:   "services/.prv.yml",
+			Status: "modified",
+		},
+	}
+	ctxSub := bundler.buildContext(&models.PRMetadata{Title: "Subdir Config"}, subdirFiles, nil, config.DefaultConfig(), "services/.prv.yml")
+	if ctxSub.ModifiedConfigFile != "services/.prv.yml" {
+		t.Errorf("expected ModifiedConfigFile 'services/.prv.yml', got %q", ctxSub.ModifiedConfigFile)
+	}
+	mdSub := bundler.ToMarkdown(ctxSub)
+	if !strings.Contains(mdSub, "Configuration file `services/.prv.yml` was modified in this change") {
+		t.Errorf("expected caution for services/.prv.yml in markdown, got:\n%s", mdSub)
+	}
+
+	// Case B: Diff retargets an intermediate directory symlink "shared_dir" (Finding 5)
+	dirSymlinkFiles := []models.FileChange{
+		{
+			Path:   "shared_dir",
+			Status: "modified",
+		},
+	}
+	ctxDir := bundler.buildContext(&models.PRMetadata{Title: "Dir Symlink Edit"}, dirSymlinkFiles, nil, config.DefaultConfig(), "shared_dir", "shared_dir/rules.yaml", "real_configs/rules.yaml")
+	if ctxDir.ModifiedConfigFile != "shared_dir" {
+		t.Errorf("expected ModifiedConfigFile 'shared_dir', got %q", ctxDir.ModifiedConfigFile)
+	}
+	mdDir := bundler.ToMarkdown(ctxDir)
+	if !strings.Contains(mdDir, "Configuration file `shared_dir` was modified in this change") {
+		t.Errorf("expected caution for shared_dir in markdown, got:\n%s", mdDir)
+	}
+}
+
+func TestBundler_RejectPRAndBaseCombination(t *testing.T) {
+	bundler := NewBundler(".")
+	_, err := bundler.PrepareBundle(models.BundleOptions{
+		PRIdentifier: "5",
+		BaseBranch:   "staging",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot specify both --pr and --base") {
+		t.Fatalf("expected error rejecting --pr and --base combination, got: %v", err)
+	}
+}
+
+func TestBundler_LocalDiff_ReportsLocalHeadCommit(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	_ = os.WriteFile(filepath.Join(tempDir, "base.go"), []byte("package main\n"), 0644)
+	runGitInDir(t, tempDir, "add", "base.go")
+	runGitInDir(t, tempDir, "commit", "-m", "base commit")
+	baseSHA := strings.TrimSpace(runGitInDir(t, tempDir, "rev-parse", "HEAD"))
+
+	runGitInDir(t, tempDir, "checkout", "-b", "feat/local-head")
+	_ = os.WriteFile(filepath.Join(tempDir, "feat.go"), []byte("package main\nfunc Feat(){}\n"), 0644)
+	runGitInDir(t, tempDir, "add", "feat.go")
+	runGitInDir(t, tempDir, "commit", "-m", "feat commit")
+	headSHA := strings.TrimSpace(runGitInDir(t, tempDir, "rev-parse", "HEAD"))
+
+	bundler := NewBundler(tempDir)
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath:   tempDir,
+		Branch:     "feat/local-head",
+		BaseBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle failed: %v", err)
+	}
+	if ctx.Metadata.BaseCommit != baseSHA {
+		t.Errorf("expected BaseCommit %q, got %q", baseSHA, ctx.Metadata.BaseCommit)
+	}
+	if ctx.Metadata.HeadCommit != headSHA {
+		t.Errorf("expected HeadCommit %q, got %q", headSHA, ctx.Metadata.HeadCommit)
+	}
+}
+
+func TestBundler_ExplicitAbsoluteConfigPath_TriggersModifiedConfigCaution(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	policyPath := filepath.Join(tempDir, "review-policy.yaml")
+	_ = os.WriteFile(policyPath, []byte("version: \"1\"\nreview:\n  persona: \"strict\"\n"), 0644)
+	runGitInDir(t, tempDir, "add", "review-policy.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "add policy")
+
+	runGitInDir(t, tempDir, "checkout", "-b", "feat/edit-policy")
+	_ = os.WriteFile(policyPath, []byte("version: \"1\"\nreview:\n  persona: \"relaxed\"\n"), 0644)
+	runGitInDir(t, tempDir, "add", "review-policy.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "edit policy")
+
+	bundler := NewBundler(tempDir)
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath:   tempDir,
+		Branch:     "feat/edit-policy",
+		BaseBranch: "main",
+		ConfigPath: policyPath, // Absolute path
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle failed: %v", err)
+	}
+	if ctx.ModifiedConfigFile != "review-policy.yaml" {
+		t.Fatalf("expected ModifiedConfigFile 'review-policy.yaml' when passing absolute --config, got %q", ctx.ModifiedConfigFile)
+	}
+	md := bundler.ToMarkdown(ctx)
+	if !strings.Contains(md, "Configuration file `review-policy.yaml` was modified in this change") {
+		t.Errorf("expected caution in markdown for modified explicit config, got:\n%s", md)
+	}
+}
+
+func TestBundler_OrphanUnbornHEAD_DoesNotFallbackToOriginHEAD(t *testing.T) {
+	tempDir := t.TempDir()
+	runGitInDir(t, tempDir, "init")
+	runGitInDir(t, tempDir, "config", "user.email", "test@example.com")
+	runGitInDir(t, tempDir, "config", "user.name", "Test User")
+	runGitInDir(t, tempDir, "checkout", "-b", "main")
+
+	// Commit a restrictive .prv.yaml on main and create refs/remotes/origin/HEAD -> origin/main
+	originYAML := `version: "1"
+review:
+  ignore_patterns:
+    - "*.go"
+  rules:
+    forbidden:
+      - "ORIGIN HEAD RULE"
+`
+	_ = os.WriteFile(filepath.Join(tempDir, ".prv.yaml"), []byte(originYAML), 0644)
+	runGitInDir(t, tempDir, "add", ".prv.yaml")
+	runGitInDir(t, tempDir, "commit", "-m", "origin main config")
+	mainSHA := strings.TrimSpace(runGitInDir(t, tempDir, "rev-parse", "HEAD"))
+	runGitInDir(t, tempDir, "update-ref", "refs/remotes/origin/main", mainSHA)
+	runGitInDir(t, tempDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	// Switch to an orphan branch where local HEAD has no commits
+	runGitInDir(t, tempDir, "checkout", "--orphan", "orphan-start")
+	runGitInDir(t, tempDir, "rm", "-rf", ".")
+
+	_ = os.WriteFile(filepath.Join(tempDir, "first.go"), []byte("package main\nfunc First(){}\n"), 0644)
+	runGitInDir(t, tempDir, "add", "first.go")
+
+	bundler := NewBundler(tempDir)
+	ctx, err := bundler.PrepareBundle(models.BundleOptions{
+		RepoPath: tempDir,
+		Staged:   true,
+	})
+	if err != nil {
+		t.Fatalf("PrepareBundle --staged on orphan branch failed: %v", err)
+	}
+	if len(ctx.ForbiddenRules) != 0 {
+		t.Errorf("expected 0 forbidden rules on unborn orphan HEAD (should not load origin/HEAD), got %v", ctx.ForbiddenRules)
+	}
+	if len(ctx.Files) != 1 || ctx.Files[0].Path != "first.go" {
+		t.Errorf("expected first.go to be reviewed (not ignored by origin/HEAD), got files=%v, ignored=%v", ctx.Files, ctx.IgnoredFiles)
 	}
 }

@@ -293,6 +293,13 @@ review:
     - "External HTTP/RPC calls must carry an explicit context with timeout"
     - "Exported Go errors must be wrapped with %w"
 
+  # Structured invariant rules (optional; complements custom_rules)
+  # rules:
+  #   forbidden:
+  #     - "NEVER build SQL with string concatenation or fmt.Sprintf"
+  #   mandated:
+  #     - "ALWAYS wrap exported Go errors with %w"
+
   ignore_patterns:
     - "dist/**"
     - "vendor/**"

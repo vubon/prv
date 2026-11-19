@@ -414,3 +414,333 @@ func TestGitRunner_GetWorkingTreeDiff(t *testing.T) {
 		t.Fatalf("expected unstaged modification in initial.go, got: %+v", changes)
 	}
 }
+
+func TestGitRunner_ReadFileAtRef(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	// Unborn HEAD returns found=false without error
+	if _, found, err := runner.ReadFileAtRef("HEAD", ".prv.yaml"); err != nil || found {
+		t.Fatalf("expected unborn HEAD to return found=false, nil; got found=%v, err=%v", found, err)
+	}
+
+	// Commit .prv.yaml on main
+	cfgPath := filepath.Join(tempDir, ".prv.yaml")
+	wantContent := "version: \"1\"\nreview:\n  persona: \"staff-advisory\"\n"
+	if err := os.WriteFile(cfgPath, []byte(wantContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunGit(t, runner, "add", ".prv.yaml")
+	mustRunGit(t, runner, "commit", "-m", "add .prv.yaml")
+
+	// Modify working tree and remove on disk -> HEAD still returns committed bytes
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := runner.ReadFileAtRef("HEAD", ".prv.yaml")
+	if err != nil || !found {
+		t.Fatalf("expected .prv.yaml at HEAD, got found=%v, err=%v", found, err)
+	}
+	if string(got) != wantContent {
+		t.Errorf("ReadFileAtRef content mismatch:\ngot:\n%q\nwant:\n%q", string(got), wantContent)
+	}
+
+	// Nonexistent path returns found=false, nil
+	if _, found, err := runner.ReadFileAtRef("main", ".prv.yml"); err != nil || found {
+		t.Fatalf("expected missing path to return found=false, nil; got found=%v, err=%v", found, err)
+	}
+
+	// Invalid ref / path rejected
+	if _, _, err := runner.ReadFileAtRef("-bad", ".prv.yaml"); err == nil {
+		t.Error("expected error for invalid ref")
+	}
+	if _, _, err := runner.ReadFileAtRef("main", "../secret"); err == nil {
+		t.Error("expected error for invalid path")
+	}
+
+	// Symlink resolution test (Finding 8): tracked symlink pointing to another committed file
+	targetPath := filepath.Join(tempDir, "shared_rules.yaml")
+	targetContent := "version: \"1\"\nreview:\n  persona: \"symlink-resolved\"\n"
+	if err := os.WriteFile(targetPath, []byte(targetContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(tempDir, "link_rules.yaml")
+	if err := os.Symlink("shared_rules.yaml", symlinkPath); err != nil {
+		t.Skip("symlinks not supported on this platform/filesystem")
+	}
+	mustRunGit(t, runner, "add", "shared_rules.yaml", "link_rules.yaml")
+	mustRunGit(t, runner, "commit", "-m", "add symlink rules")
+
+	symBytes, foundSym, errSym := runner.ReadFileAtRef("HEAD", "link_rules.yaml")
+	if errSym != nil || !foundSym {
+		t.Fatalf("expected symlink link_rules.yaml to resolve at HEAD, got found=%v, err=%v", foundSym, errSym)
+	}
+	if string(symBytes) != targetContent {
+		t.Errorf("symlink content mismatch:\ngot %q\nwant %q", string(symBytes), targetContent)
+	}
+
+	// Directory symlink test (Finding 5): intermediate directory is a symlink
+	realDir := filepath.Join(tempDir, "real_configs")
+	if err := os.MkdirAll(realDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	nestedRule := filepath.Join(realDir, "rules.yaml")
+	nestedContent := "version: \"1\"\nreview:\n  persona: \"dir-symlink-resolved\"\n"
+	if err := os.WriteFile(nestedRule, []byte(nestedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dirSymlinkPath := filepath.Join(tempDir, "shared_dir")
+	if err := os.Symlink("real_configs", dirSymlinkPath); err != nil {
+		t.Skip("symlinks not supported")
+	}
+	mustRunGit(t, runner, "add", "real_configs/rules.yaml", "shared_dir")
+	mustRunGit(t, runner, "commit", "-m", "add directory symlink")
+
+	dirSymBytes, resolvedPath, traversedPaths, foundDirSym, errDirSym := runner.ReadFileAtRefWithResolvedPath("HEAD", "shared_dir/rules.yaml")
+	if errDirSym != nil || !foundDirSym {
+		t.Fatalf("expected shared_dir/rules.yaml to resolve via directory symlink, got found=%v, err=%v", foundDirSym, errDirSym)
+	}
+	if string(dirSymBytes) != nestedContent {
+		t.Errorf("dir symlink content mismatch:\ngot %q\nwant %q", string(dirSymBytes), nestedContent)
+	}
+	if resolvedPath != "real_configs/rules.yaml" {
+		t.Errorf("expected resolvedPath 'real_configs/rules.yaml', got %q", resolvedPath)
+	}
+	if len(traversedPaths) == 0 {
+		t.Errorf("expected traversedPaths to be populated, got empty")
+	}
+}
+
+func TestGitRunner_ResolveBaseRevision(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	if err := os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte("v1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunGit(t, runner, "add", "file.txt")
+	mustRunGit(t, runner, "commit", "-m", "init")
+
+	refName, sha, err := runner.ResolveBaseRevision("main")
+	if err != nil {
+		t.Fatalf("ResolveBaseRevision('main') failed: %v", err)
+	}
+	if refName != "main" {
+		t.Errorf("expected refName 'main', got %q", refName)
+	}
+	if len(sha) != 40 {
+		t.Errorf("expected 40-char commit SHA, got %q", sha)
+	}
+
+	// HEAD resolution
+	headRef, headSHA, err := runner.ResolveBaseRevision("HEAD")
+	if err != nil || headRef != "HEAD" || headSHA != sha {
+		t.Errorf("expected HEAD to resolve to commit %q, got ref=%q, sha=%q, err=%v", sha, headRef, headSHA, err)
+	}
+
+	// Nonexistent branch
+	if _, _, err := runner.ResolveBaseRevision("non-existent"); err == nil {
+		t.Error("expected error resolving non-existent base branch")
+	}
+
+	// Exact commit SHA (Finding 6): should resolve directly without checking origin/<sha>
+	directRef, directSHA, err := runner.ResolveBaseRevision(sha)
+	if err != nil || directRef != sha || directSHA != sha {
+		t.Errorf("expected commit SHA %q to resolve directly, got ref=%q, sha=%q, err=%v", sha, directRef, directSHA, err)
+	}
+}
+
+func TestParseUnifiedDiff_RenameHeader(t *testing.T) {
+	rawDiff := `diff --git a/.prv.yaml b/.prv.yaml.bak
+similarity index 100%
+rename from .prv.yaml
+rename to .prv.yaml.bak
+`
+	files, err := ParseUnifiedDiff(rawDiff, false)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff failed: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	f := files[0]
+	if f.Status != "renamed" {
+		t.Errorf("expected status 'renamed', got %q", f.Status)
+	}
+	if f.OldPath != ".prv.yaml" {
+		t.Errorf("expected OldPath '.prv.yaml', got %q", f.OldPath)
+	}
+	if f.Path != ".prv.yaml.bak" {
+		t.Errorf("expected Path '.prv.yaml.bak', got %q", f.Path)
+	}
+}
+
+func TestParseRemoteHostAndSlug(t *testing.T) {
+	tests := []struct {
+		url       string
+		wantHost  string
+		wantOwner string
+		wantRepo  string
+	}{
+		{"git@github.com:org/repo.git", "github.com", "org", "repo"},
+		{"https://github.com/org/repo.git", "github.com", "org", "repo"},
+		{"https://gitlab.example.com/team/project.git", "gitlab.example.com", "team", "project"},
+		{"git@gitlab.internal.corp:devs/engine.git", "gitlab.internal.corp", "devs", "engine"},
+	}
+
+	for _, tt := range tests {
+		host, owner, repo, err := ParseRemoteHostAndSlug(tt.url)
+		if err != nil {
+			t.Errorf("ParseRemoteHostAndSlug(%q) unexpected error: %v", tt.url, err)
+			continue
+		}
+		if host != tt.wantHost || owner != tt.wantOwner || repo != tt.wantRepo {
+			t.Errorf("ParseRemoteHostAndSlug(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				tt.url, host, owner, repo, tt.wantHost, tt.wantOwner, tt.wantRepo)
+		}
+	}
+}
+
+func TestGitRunner_ResolveBaseRevision_HexCommitID_DoesNotCheckOriginBranch(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	dummyFile := filepath.Join(tempDir, "file.txt")
+	_ = os.WriteFile(dummyFile, []byte("content"), 0644)
+	mustRunGit(t, runner, "add", "file.txt")
+	mustRunGit(t, runner, "commit", "-m", "init")
+
+	// Create a branch named origin/<dummy-40-hex-sha>
+	dummySHA := "1234567890abcdef1234567890abcdef12345678"
+	mustRunGit(t, runner, "branch", "origin/"+dummySHA)
+
+	// Resolving dummySHA (which is NOT a real commit object) must NOT resolve to origin/<dummySHA> (Finding 3)
+	_, _, err := runner.ResolveBaseRevision(dummySHA)
+	if err == nil {
+		t.Fatalf("expected error resolving non-existent commit SHA %s, but got nil (resolved to branch)", dummySHA)
+	}
+
+	// resolveCommitRef must also return "" for non-existent commit SHA
+	ref := runner.resolveCommitRef(dummySHA)
+	if ref != "" {
+		t.Fatalf("expected resolveCommitRef to return empty for non-existent commit SHA, got %q", ref)
+	}
+}
+
+func TestGitRunner_CommittedSymlink_FromSubdirectory_ResolvesAgainstRepoRoot(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	servicesDir := filepath.Join(tempDir, "services")
+	sharedDir := filepath.Join(tempDir, "shared")
+	if err := os.MkdirAll(servicesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sharedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	rulesContent := "version: \"1\"\nreview:\n  persona: \"sub-service-rules\"\n"
+	if err := os.WriteFile(filepath.Join(sharedDir, "rules.yaml"), []byte(rulesContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// services/.prv.yml points to ../shared/rules.yaml
+	symlinkPath := filepath.Join(servicesDir, ".prv.yml")
+	if err := os.Symlink("../shared/rules.yaml", symlinkPath); err != nil {
+		t.Skip("symlinks not supported")
+	}
+
+	mustRunGit(t, runner, "add", "shared/rules.yaml", "services/.prv.yml")
+	mustRunGit(t, runner, "commit", "-m", "add services symlink")
+
+	// Run from services subdirectory (Finding 4)
+	subRunner := NewGitRunner(servicesDir)
+	bytes, resolvedPath, traversedPaths, found, err := subRunner.ReadFileAtRefWithResolvedPath("HEAD", ".prv.yml")
+	if err != nil || !found {
+		t.Fatalf("expected .prv.yml from services subdir to resolve, got found=%v, err=%v", found, err)
+	}
+	if string(bytes) != rulesContent {
+		t.Errorf("content mismatch: got %q, want %q", string(bytes), rulesContent)
+	}
+	if resolvedPath != "shared/rules.yaml" {
+		t.Errorf("expected resolvedPath 'shared/rules.yaml', got %q", resolvedPath)
+	}
+	foundInitial := false
+	foundTarget := false
+	for _, p := range traversedPaths {
+		if p == "services/.prv.yml" {
+			foundInitial = true
+		}
+		if p == "shared/rules.yaml" {
+			foundTarget = true
+		}
+	}
+	if !foundInitial || !foundTarget {
+		t.Errorf("expected traversedPaths to contain services/.prv.yml and shared/rules.yaml, got %v", traversedPaths)
+	}
+}
+
+func TestGitRunner_CommittedSymlink_AbsoluteTarget_RejectedFromSubdirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := NewGitRunner(tempDir)
+
+	if _, err := runner.runCmd("init", "-b", "main"); err != nil {
+		mustRunGit(t, runner, "init")
+		mustRunGit(t, runner, "checkout", "-b", "main")
+	}
+	mustRunGit(t, runner, "config", "user.email", "test@example.com")
+	mustRunGit(t, runner, "config", "user.name", "Test User")
+
+	servicesDir := filepath.Join(tempDir, "services")
+	if err := os.MkdirAll(servicesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tracked file inside services/rules.yaml
+	if err := os.WriteFile(filepath.Join(servicesDir, "rules.yaml"), []byte("version: \"1\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Absolute symlink services/.prv.yml -> /rules.yaml
+	symlinkPath := filepath.Join(servicesDir, ".prv.yml")
+	if err := os.Symlink("/rules.yaml", symlinkPath); err != nil {
+		t.Skip("symlinks not supported")
+	}
+
+	mustRunGit(t, runner, "add", "services/rules.yaml", "services/.prv.yml")
+	mustRunGit(t, runner, "commit", "-m", "add absolute symlink")
+
+	subRunner := NewGitRunner(servicesDir)
+	_, _, _, _, err := subRunner.ReadFileAtRefWithResolvedPath("HEAD", ".prv.yml")
+	if err == nil {
+		t.Fatalf("expected error rejecting absolute symlink target /rules.yaml from subdirectory, got nil")
+	}
+}

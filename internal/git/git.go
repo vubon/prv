@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,8 +29,13 @@ func NewGitRunner(repoPath string) *GitRunner {
 
 // runCmd executes a git command in the repository path.
 func (g *GitRunner) runCmd(args ...string) (string, error) {
+	return g.runCmdAt(g.RepoPath, args...)
+}
+
+// runCmdAt executes a git command in an explicit directory.
+func (g *GitRunner) runCmdAt(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
-	cmd.Dir = g.RepoPath
+	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -39,6 +45,25 @@ func (g *GitRunner) runCmd(args ...string) (string, error) {
 		return "", fmt.Errorf("git %s failed: %w (stderr: %s)", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// GetRepoRoot returns the absolute path of the top-level repository root.
+func (g *GitRunner) GetRepoRoot() (string, error) {
+	out, err := g.runCmd("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// GetRepoPrefix returns the working directory prefix relative to the repository root
+// (e.g. "services" if run from a subdirectory, or "" if run from the repo root).
+func (g *GitRunner) GetRepoPrefix() string {
+	out, err := g.runCmd("rev-parse", "--show-prefix")
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(out), "/")
 }
 
 // runCmdWithTimeout executes a git command in the repository path with an explicit timeout
@@ -165,23 +190,9 @@ func (g *GitRunner) GetDiff(baseBranch, headBranch string, includeLocks bool) ([
 	if err := ValidateRefName(baseBranch); err != nil {
 		return nil, err
 	}
-	baseRef := baseBranch
-
-	// Check if base branch exists remotely or locally
-	if _, err := g.runCmd("rev-parse", "--verify", "origin/"+baseRef); err == nil {
-		baseRef = "origin/" + baseRef
-	} else if _, err := g.runCmd("rev-parse", "--verify", baseRef); err == nil {
-		// Local branch / ref exists
-	} else {
-		// Attempt to fetch origin in case baseBranch was created or updated remotely (15s timeout, non-interactive)
-		_, _ = g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", baseBranch)
-		if _, err := g.runCmd("rev-parse", "--verify", "origin/"+baseBranch); err == nil {
-			baseRef = "origin/" + baseBranch
-		} else if _, err := g.runCmd("rev-parse", "--verify", baseBranch); err == nil {
-			baseRef = baseBranch
-		} else {
-			return nil, fmt.Errorf("base branch '%s' not found locally or on remote origin (checked '%s' and 'origin/%s')", baseBranch, baseBranch, baseBranch)
-		}
+	baseRef, _, err := g.ResolveBaseRevision(baseBranch)
+	if err != nil {
+		return nil, err
 	}
 
 	// Run git diff baseRef...headRef (three dots finds merge base)
@@ -198,6 +209,102 @@ func (g *GitRunner) GetDiff(baseBranch, headBranch string, includeLocks bool) ([
 	}
 
 	return ParseUnifiedDiff(diffOutput, includeLocks)
+}
+
+// IsHexCommitID checks if a string is a 40-character or 64-character full git object ID.
+func IsHexCommitID(ref string) bool {
+	if len(ref) != 40 && len(ref) != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func isHexCommitID(ref string) bool {
+	return IsHexCommitID(ref)
+}
+
+// ResolveBaseRevision resolves baseBranch to an existing commit reference (e.g. origin/<base>, <base>, or SHA),
+// attempting a remote fetch if needed. It returns the resolved ref name and the exact commit SHA.
+func (g *GitRunner) ResolveBaseRevision(baseBranch string) (refName string, commitSHA string, err error) {
+	if err := ValidateRefName(baseBranch); err != nil {
+		return "", "", err
+	}
+
+	// Direct check if baseBranch is already an exact commit object ID (Finding 3)
+	if isHexCommitID(baseBranch) {
+		if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
+			return baseBranch, strings.TrimSpace(sha), nil
+		}
+		// Attempt to fetch exact commit from origin
+		if fetchErr := g.FetchCommit(baseBranch); fetchErr == nil {
+			if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
+				return baseBranch, strings.TrimSpace(sha), nil
+			}
+		}
+		return "", "", fmt.Errorf("commit %q not found locally or on remote origin", baseBranch)
+	}
+
+	// Direct check if baseBranch is HEAD or an already qualified ref
+	if baseBranch == "HEAD" || strings.HasPrefix(baseBranch, "origin/") || strings.HasPrefix(baseBranch, "refs/") {
+		if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
+			return baseBranch, strings.TrimSpace(sha), nil
+		}
+		return "", "", fmt.Errorf("revision %q not found locally", baseBranch)
+	}
+
+	// Prefer origin/<baseBranch> when available to capture latest upstream changes
+	if sha, err := g.runCmd("rev-parse", "--verify", "origin/"+baseBranch+"^{commit}"); err == nil {
+		return "origin/" + baseBranch, strings.TrimSpace(sha), nil
+	}
+
+	// Check local baseBranch
+	if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
+		return baseBranch, strings.TrimSpace(sha), nil
+	}
+
+	// Attempt to fetch origin in case baseBranch was created or updated remotely (15s timeout, non-interactive)
+	_, _ = g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", baseBranch)
+	if sha, err := g.runCmd("rev-parse", "--verify", "origin/"+baseBranch+"^{commit}"); err == nil {
+		return "origin/" + baseBranch, strings.TrimSpace(sha), nil
+	}
+	if sha, err := g.runCmd("rev-parse", "--verify", baseBranch+"^{commit}"); err == nil {
+		return baseBranch, strings.TrimSpace(sha), nil
+	}
+
+	return "", "", fmt.Errorf("base branch '%s' not found locally or on remote origin (checked '%s' and 'origin/%s')", baseBranch, baseBranch, baseBranch)
+}
+
+// ResolveHeadCommit resolves headBranch (preferring local branch or HEAD, then origin/<headBranch>)
+// to its exact commit SHA.
+func (g *GitRunner) ResolveHeadCommit(headBranch string) (string, error) {
+	headRef := headBranch
+	if headRef == "" {
+		curr, err := g.GetCurrentBranch()
+		if err == nil && curr != "" {
+			headRef = curr
+		} else {
+			headRef = "HEAD"
+		}
+	}
+	if headRef != "HEAD" {
+		if err := ValidateRefName(headRef); err != nil {
+			return "", err
+		}
+	}
+	if sha, err := g.runCmd("rev-parse", "--verify", headRef+"^{commit}"); err == nil {
+		return strings.TrimSpace(sha), nil
+	}
+	if headRef != "HEAD" && !strings.HasPrefix(headRef, "origin/") && !strings.HasPrefix(headRef, "refs/") && !isHexCommitID(headRef) {
+		if sha, err := g.runCmd("rev-parse", "--verify", "origin/"+headRef+"^{commit}"); err == nil {
+			return strings.TrimSpace(sha), nil
+		}
+	}
+	return "", fmt.Errorf("could not resolve head revision %q", headBranch)
 }
 
 // GetStagedDiff runs git diff --cached and returns parsed file changes for staged index.
@@ -229,6 +336,222 @@ func (g *GitRunner) GetWorkingTreeDiff(includeLocks bool) ([]models.FileChange, 
 	}
 	combined := strings.TrimSpace(stagedOut + "\n" + unstagedOut)
 	return ParseUnifiedDiff(combined, includeLocks)
+}
+
+// resolveCommitRef resolves ref (or origin/<ref> for unqualified branch names) to a valid commit ref,
+// returning "" if neither exists locally. It prefers exact object IDs, then origin/<ref> for unqualified branch names.
+func (g *GitRunner) resolveCommitRef(ref string) string {
+	if err := ValidateRefName(ref); err != nil {
+		return ""
+	}
+	if isHexCommitID(ref) {
+		if _, err := g.runCmd("rev-parse", "--verify", ref+"^{commit}"); err == nil {
+			return ref
+		}
+		return ""
+	}
+	if ref == "HEAD" || strings.HasPrefix(ref, "origin/") || strings.HasPrefix(ref, "refs/") {
+		if _, err := g.runCmd("rev-parse", "--verify", ref+"^{commit}"); err == nil {
+			return ref
+		}
+		return ""
+	}
+	if _, err := g.runCmd("rev-parse", "--verify", "origin/"+ref+"^{commit}"); err == nil {
+		return "origin/" + ref
+	}
+	if _, err := g.runCmd("rev-parse", "--verify", ref+"^{commit}"); err == nil {
+		return ref
+	}
+	return ""
+}
+
+// RefExists reports whether ref (or origin/<ref>) resolves to an existing commit in the local repository.
+func (g *GitRunner) RefExists(ref string) bool {
+	return g.resolveCommitRef(ref) != ""
+}
+
+// FetchCommit attempts to fetch an exact commit object from origin (15s timeout, non-interactive).
+func (g *GitRunner) FetchCommit(sha string) error {
+	if !isHexCommitID(sha) {
+		return fmt.Errorf("invalid commit sha %q", sha)
+	}
+	_, err := g.runCmdWithTimeout(15*time.Second, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", sha)
+	return err
+}
+
+// resolveCommittedPath resolves filePath within commit ref, following both file symlinks
+// and intermediate directory symlinks up to maxHops. It returns the final blob SHA, the final resolved
+// repository-relative path, all traversed repository-relative paths, found bool, and any error encountered.
+func (g *GitRunner) resolveCommittedPath(ref, filePath string, maxHops int) (blobSHA string, resolvedPath string, traversedPaths []string, found bool, err error) {
+	rawPath := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(filePath)), "./")
+	if rawPath == "" {
+		return "", "", nil, false, nil
+	}
+
+	repoPrefix := g.GetRepoPrefix()
+	repoRelPath := rawPath
+	if repoPrefix != "" {
+		if !strings.HasPrefix(rawPath, repoPrefix+"/") && rawPath != repoPrefix {
+			repoRelPath = filepath.Clean(filepath.Join(repoPrefix, rawPath))
+			repoRelPath = strings.TrimPrefix(filepath.ToSlash(repoRelPath), "./")
+		}
+	}
+
+	if strings.HasPrefix(repoRelPath, "..") || strings.Contains(repoRelPath, "/../") {
+		return "", "", nil, false, fmt.Errorf("repository file path %q points outside repository", filePath)
+	}
+
+	repoRoot, _ := g.GetRepoRoot()
+	if repoRoot == "" {
+		repoRoot = g.RepoPath
+	}
+
+	traversedPaths = append(traversedPaths, repoRelPath)
+	currentPath := repoRelPath
+
+	hops := 0
+	for hops < maxHops {
+		segments := strings.Split(currentPath, "/")
+		var prefix string
+		foundSymlink := false
+
+		for i, seg := range segments {
+			if prefix == "" {
+				prefix = seg
+			} else {
+				prefix = prefix + "/" + seg
+			}
+
+			lsOut, lsErr := g.runCmdAt(repoRoot, "ls-tree", ref, "--", prefix)
+			if lsErr != nil {
+				return "", "", nil, false, fmt.Errorf("failed to read git tree at %s:%s: %w", ref, prefix, lsErr)
+			}
+			trimmedOut := strings.TrimSpace(lsOut)
+			if trimmedOut == "" {
+				return "", "", nil, false, nil
+			}
+
+			fields := strings.Fields(trimmedOut)
+			if len(fields) < 3 {
+				return "", "", nil, false, fmt.Errorf("invalid ls-tree output for %s:%s: %q", ref, prefix, trimmedOut)
+			}
+			mode := fields[0]
+			objType := fields[1]
+			sha := fields[2]
+
+			if mode == "120000" {
+				hops++
+				if hops >= maxHops {
+					return "", "", nil, false, fmt.Errorf("too many symlink levels resolving %q at ref %q", filePath, ref)
+				}
+				targetBytes, catErr := g.runCmdAt(repoRoot, "cat-file", "-p", sha)
+				if catErr != nil {
+					return "", "", nil, false, fmt.Errorf("failed to read symlink target at %s:%s: %w", ref, prefix, catErr)
+				}
+				targetRaw := strings.TrimSpace(targetBytes)
+				if strings.HasPrefix(targetRaw, "/") || strings.HasPrefix(targetRaw, "\\") || filepath.IsAbs(targetRaw) || strings.Contains(targetRaw, ":") {
+					return "", "", nil, false, fmt.Errorf("tracked symlink %q at ref %q points outside repository root (%q)", prefix, ref, targetRaw)
+				}
+				dir := filepath.Dir(prefix)
+				if dir == "." {
+					dir = ""
+				}
+				targetPath := filepath.Clean(filepath.Join(dir, targetRaw))
+				targetPath = strings.TrimPrefix(filepath.ToSlash(targetPath), "./")
+				if targetPath == ".." || strings.HasPrefix(targetPath, "../") || strings.HasPrefix(targetPath, "/") || strings.Contains(targetPath, ":") {
+					return "", "", nil, false, fmt.Errorf("tracked symlink %q at ref %q points outside repository root (%q)", prefix, ref, targetRaw)
+				}
+
+				traversedPaths = append(traversedPaths, prefix)
+				traversedPaths = append(traversedPaths, targetPath)
+
+				remaining := segments[i+1:]
+				if len(remaining) > 0 {
+					currentPath = filepath.Clean(filepath.Join(targetPath, filepath.Join(remaining...)))
+					currentPath = strings.TrimPrefix(filepath.ToSlash(currentPath), "./")
+				} else {
+					currentPath = targetPath
+				}
+				foundSymlink = true
+				break
+			}
+
+			if i == len(segments)-1 {
+				if objType == "blob" {
+					traversedPaths = append(traversedPaths, prefix)
+					dedup := make([]string, 0, len(traversedPaths))
+					seen := make(map[string]bool)
+					for _, p := range traversedPaths {
+						cleanP := strings.TrimPrefix(filepath.ToSlash(p), "./")
+						if cleanP != "" && !seen[cleanP] {
+							seen[cleanP] = true
+							dedup = append(dedup, cleanP)
+						}
+					}
+					return sha, prefix, dedup, true, nil
+				}
+				return "", "", nil, false, nil
+			}
+
+			if objType != "tree" {
+				return "", "", nil, false, nil
+			}
+		}
+
+		if !foundSymlink {
+			break
+		}
+	}
+
+	return "", "", nil, false, nil
+}
+
+// ReadFileAtRef reads the exact bytes of filePath at the given git commit/branch ref,
+// resolving tracked git symlinks (mode 120000) and directory symlinks within the same revision up to 5 hops.
+// It returns found=false, err=nil when the ref or blob path does not exist at that revision.
+func (g *GitRunner) ReadFileAtRef(ref, filePath string) ([]byte, bool, error) {
+	bytes, _, _, found, err := g.ReadFileAtRefWithResolvedPath(ref, filePath)
+	return bytes, found, err
+}
+
+// ReadFileAtRefWithResolvedPath reads the exact bytes of filePath at the given git commit/branch ref,
+// returning the final resolved in-tree path and all traversed paths alongside the blob bytes.
+func (g *GitRunner) ReadFileAtRefWithResolvedPath(ref, filePath string) ([]byte, string, []string, bool, error) {
+	if err := ValidateRefName(ref); err != nil {
+		return nil, "", nil, false, err
+	}
+	cleanPath := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(filePath)), "./")
+	if cleanPath == "" || strings.ContainsAny(cleanPath, ":\r\n") {
+		return nil, "", nil, false, fmt.Errorf("invalid repository file path %q", filePath)
+	}
+
+	resolved := g.resolveCommitRef(ref)
+	if resolved == "" {
+		return nil, "", nil, false, nil
+	}
+
+	const maxSymlinkHops = 5
+	blobSHA, resolvedPath, traversedPaths, found, err := g.resolveCommittedPath(resolved, cleanPath, maxSymlinkHops)
+	if err != nil {
+		return nil, "", nil, false, err
+	}
+	if !found {
+		return nil, "", nil, false, nil
+	}
+
+	repoRoot, _ := g.GetRepoRoot()
+	if repoRoot == "" {
+		repoRoot = g.RepoPath
+	}
+	cmd := exec.Command("git", "cat-file", "-p", blobSHA)
+	cmd.Dir = repoRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, "", nil, false, fmt.Errorf("git cat-file -p %s failed: %w (stderr: %s)", blobSHA, err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), resolvedPath, traversedPaths, true, nil
 }
 
 // ParseUnifiedDiff parses a raw unified diff string into structured FileChange objects.
@@ -292,8 +615,16 @@ func ParseUnifiedDiff(rawDiff string, includeLocks bool) ([]models.FileChange, e
 			currentFile.Status = "added"
 		} else if strings.HasPrefix(line, "deleted file mode") {
 			currentFile.Status = "deleted"
-		} else if strings.HasPrefix(line, "similarity index") || strings.HasPrefix(line, "rename from") {
+		} else if strings.HasPrefix(line, "similarity index") {
 			currentFile.Status = "renamed"
+		} else if strings.HasPrefix(line, "rename from ") {
+			currentFile.Status = "renamed"
+			oldP := strings.TrimSpace(strings.TrimPrefix(line, "rename from "))
+			currentFile.OldPath = strings.Trim(oldP, "\"")
+		} else if strings.HasPrefix(line, "rename to ") {
+			currentFile.Status = "renamed"
+			newP := strings.TrimSpace(strings.TrimPrefix(line, "rename to "))
+			currentFile.Path = strings.Trim(newP, "\"")
 		} else if strings.HasPrefix(line, "+++ ") && !inHunk {
 			target := strings.TrimPrefix(line, "+++ ")
 			target = strings.TrimPrefix(target, "b/")

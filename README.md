@@ -142,7 +142,12 @@ prv bundle --branch feat/user-auth --base staging
 # By GitHub PR number or full URL
 prv bundle --pr 42
 prv bundle --pr https://github.com/owner/repo/pull/42
+
+# Re-check findings from previous iteration review
+prv bundle --branch feat/auth --prior reviews/2026-11-19-feat-auth.json
 ```
+
+Use the JSON saved by `prv report` with `--prior`. The bundle includes up to 50 prior findings and reports how many were omitted.
 
 ---
 
@@ -347,6 +352,7 @@ review:
 | | `--staged, -s` | Bundle uncommitted staged git changes (`git diff --cached`). |
 | | `--dirty, -w` | Bundle uncommitted working-tree and staged changes (`git diff HEAD`). |
 | | `--context-file, -c` | Path to markdown context/spec file (repeatable). |
+| | `--prior, -P` | Path to prior review JSON report for iteration re-check. |
 | | `--max-lines` | Maximum total diff lines to include in bundle (risk-tiered; `0` = unlimited). |
 | | `--pr` | GitHub PR number or full URL. |
 | | `--output, -o` | Output file path (default: stdout). |

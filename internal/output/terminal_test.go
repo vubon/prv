@@ -52,12 +52,12 @@ func TestPrintBundleSummary(t *testing.T) {
 				IsSensitive: true,
 			},
 			{
-				Path:      "cmd/prv/main.go",
+				Path:      "cmd/prv/main\nfile.go",
 				Additions: 20,
 				Deletions: 5,
 			},
 		},
-		IgnoredFiles: []string{"go.sum (lockfile)"},
+		IgnoredFiles: []string{"go.sum (lockfile)", "generated\rfile (noise)"},
 		BundledAt:    time.Now(),
 	}
 
@@ -76,6 +76,9 @@ func TestPrintBundleSummary(t *testing.T) {
 	}
 	if !strings.Contains(out, "go.sum") {
 		t.Error("expected ignored file in bundle summary")
+	}
+	if !strings.Contains(out, `cmd/prv/main\nfile.go`) || !strings.Contains(out, `generated\rfile (noise)`) {
+		t.Errorf("expected printable filename escapes in bundle summary, got %q", out)
 	}
 }
 
@@ -156,5 +159,38 @@ func TestPrintBundleSummary_InvariantRules(t *testing.T) {
 	})
 	if strings.Contains(emptyOut, "Invariants:") {
 		t.Errorf("expected Invariants line omitted when counts are zero, got:\n%s", emptyOut)
+	}
+}
+
+func TestPrintBundleSummary_PriorFindings(t *testing.T) {
+	ctx := &models.PRContext{
+		Metadata: models.PRMetadata{Title: "Iteration PR", HeadBranch: "feat/x", BaseBranch: "main"},
+		PriorFindings: []models.PriorFinding{
+			{ID: "P-01", Touched: true},
+			{ID: "P-02", Touched: false},
+			{ID: "P-03", Touched: true},
+		},
+		PriorFindingsOmitted:  4,
+		PriorReviewPRMismatch: true,
+	}
+
+	out := captureStdout(func() {
+		PrintBundleSummary(ctx)
+	})
+	if !strings.Contains(out, "Prior:") || !strings.Contains(out, "3 findings (2 touched, 4 omitted)") {
+		t.Errorf("expected prior findings summary line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "identifies a different pull request") {
+		t.Errorf("expected prior PR mismatch warning, got:\n%s", out)
+	}
+
+	emptyCtx := &models.PRContext{
+		Metadata: models.PRMetadata{Title: "Plain PR", HeadBranch: "feat/x", BaseBranch: "main"},
+	}
+	emptyOut := captureStdout(func() {
+		PrintBundleSummary(emptyCtx)
+	})
+	if strings.Contains(emptyOut, "Prior:") {
+		t.Errorf("expected Prior: line omitted when zero prior findings, got:\n%s", emptyOut)
 	}
 }

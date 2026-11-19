@@ -37,6 +37,29 @@ type UserContextDoc struct {
 	Content    string `json:"content"`
 }
 
+// PriorFinding represents a finding from a previous review iteration for re-checking.
+type PriorFinding struct {
+	ID            string `json:"id"`
+	Severity      string `json:"severity"`
+	File          string `json:"file"`
+	Line          int    `json:"line,omitempty"`
+	Title         string `json:"title"`
+	Description   string `json:"description,omitempty"`
+	Evidence      string `json:"evidence,omitempty"`
+	Suggestion    string `json:"suggestion,omitempty"`
+	Touched       bool   `json:"touched"`
+	PathAmbiguous bool   `json:"path_ambiguous,omitempty"` // Literal backslash or Windows separator could not be disambiguated.
+	PathRedacted  bool   `json:"path_redacted,omitempty"`  // File is a display basename without a repository-relative location.
+}
+
+// PriorReviewPolicy tells reviewers how to evaluate the prior findings in a bundle.
+type PriorReviewPolicy struct {
+	Instructions   string   `json:"instructions"`
+	Statuses       []string `json:"statuses"`
+	StatusGuidance string   `json:"status_guidance"`
+	TouchedMeaning string   `json:"touched_meaning"`
+}
+
 // ForbiddenEvidenceRequirement is the shared evidence instruction for forbidden rule violations.
 const ForbiddenEvidenceRequirement = "Quote the added or deleted lines that introduced the violation, and explain how the resulting code violates the rule."
 
@@ -54,21 +77,25 @@ type InvariantRulePolicy struct {
 
 // PRContext is the complete bundle payload produced by prv bundle.
 type PRContext struct {
-	Metadata            PRMetadata           `json:"metadata"`
-	SummaryStats        SummaryStats         `json:"summary_stats"`
-	Files               []FileChange         `json:"files"`
-	FileWalkthroughs    []FileWalkthrough    `json:"file_walkthroughs,omitempty"`
-	IgnoredFiles        []string             `json:"ignored_files,omitempty"`
-	SensitiveFiles      []string             `json:"sensitive_files,omitempty"`
-	CustomRules         []string             `json:"custom_rules,omitempty"`
-	ForbiddenRules      []string             `json:"forbidden_rules,omitempty"`
-	MandatedRules       []string             `json:"mandated_rules,omitempty"`
-	RulePolicy          *InvariantRulePolicy `json:"rule_policy,omitempty"`
-	Persona             string               `json:"persona,omitempty"`
-	ArchitectureDiagram string               `json:"architecture_diagram,omitempty"`
-	ModifiedConfigFile  string               `json:"modified_config_file,omitempty"`
-	BundledAt           time.Time            `json:"bundled_at"`
-	UserContext         []UserContextDoc     `json:"user_context,omitempty"`
+	Metadata              PRMetadata           `json:"metadata"`
+	SummaryStats          SummaryStats         `json:"summary_stats"`
+	Files                 []FileChange         `json:"files"`
+	FileWalkthroughs      []FileWalkthrough    `json:"file_walkthroughs,omitempty"`
+	IgnoredFiles          []string             `json:"ignored_files,omitempty"`
+	SensitiveFiles        []string             `json:"sensitive_files,omitempty"`
+	CustomRules           []string             `json:"custom_rules,omitempty"`
+	ForbiddenRules        []string             `json:"forbidden_rules,omitempty"`
+	MandatedRules         []string             `json:"mandated_rules,omitempty"`
+	PriorFindings         []PriorFinding       `json:"prior_findings,omitempty"`
+	PriorReviewPolicy     *PriorReviewPolicy   `json:"prior_review_policy,omitempty"`
+	PriorFindingsOmitted  int                  `json:"prior_findings_omitted,omitempty"`
+	PriorReviewPRMismatch bool                 `json:"prior_review_pr_mismatch,omitempty"`
+	RulePolicy            *InvariantRulePolicy `json:"rule_policy,omitempty"`
+	Persona               string               `json:"persona,omitempty"`
+	ArchitectureDiagram   string               `json:"architecture_diagram,omitempty"`
+	ModifiedConfigFile    string               `json:"modified_config_file,omitempty"`
+	BundledAt             time.Time            `json:"bundled_at"`
+	UserContext           []UserContextDoc     `json:"user_context,omitempty"`
 }
 
 // SummaryStats contains aggregated diff metrics.
@@ -94,4 +121,5 @@ type BundleOptions struct {
 	IncludeLocks bool
 	MaxDiffLines int      // Optional diff line budget cap (--max-lines; 0 = unlimited)
 	ContextFiles []string // Explicit reviewer context file paths (--context-file)
+	PriorPath    string   // Optional path to prior review JSON (--prior)
 }

@@ -331,6 +331,28 @@ func TestBundleFlags_DirtyAndMaxLines(t *testing.T) {
 	}
 }
 
+func TestBundleFlags_PriorFlag(t *testing.T) {
+	fs := flag.NewFlagSet("bundle", flag.ContinueOnError)
+	var priorPath string
+	fs.StringVar(&priorPath, "prior", "", "")
+	fs.StringVar(&priorPath, "P", "", "")
+
+	_ = parseFlagsAndPositionals(fs, []string{"--prior", "review.json"})
+	if priorPath != "review.json" {
+		t.Errorf("expected priorPath='review.json', got %q", priorPath)
+	}
+
+	fs2 := flag.NewFlagSet("bundle", flag.ContinueOnError)
+	var priorPath2 string
+	fs2.StringVar(&priorPath2, "prior", "", "")
+	fs2.StringVar(&priorPath2, "P", "", "")
+
+	_ = parseFlagsAndPositionals(fs2, []string{"-P", "reviews/old.json"})
+	if priorPath2 != "reviews/old.json" {
+		t.Errorf("expected priorPath='reviews/old.json' from -P, got %q", priorPath2)
+	}
+}
+
 func TestExecuteReport_EvidencePolicyModes(t *testing.T) {
 	tempDir := t.TempDir()
 	reviewJSONPath := filepath.Join(tempDir, "input.json")

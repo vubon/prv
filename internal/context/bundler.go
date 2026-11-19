@@ -3,10 +3,13 @@ package context
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/vubon/prv/internal/config"
 	"github.com/vubon/prv/internal/diagram"
@@ -118,7 +121,12 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			}
 		}
 
-		return b.buildContext(meta, fileChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
+		prior, pErr := b.loadPriorReview(opts, &effectiveCfgCopy, isLocalMatch, fileChanges)
+		if pErr != nil {
+			return nil, pErr
+		}
+
+		return b.buildContext(meta, fileChanges, userContextDocs, prior, &effectiveCfgCopy, activeConfigPaths...), nil
 	}
 
 	// Case 2: Staged Changes (--staged)
@@ -163,7 +171,12 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			CreatedAt:   time.Now(),
 		}
 
-		return b.buildContext(meta, stagedChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
+		prior, pErr := b.loadPriorReview(opts, &effectiveCfgCopy, true, stagedChanges)
+		if pErr != nil {
+			return nil, pErr
+		}
+
+		return b.buildContext(meta, stagedChanges, userContextDocs, prior, &effectiveCfgCopy, activeConfigPaths...), nil
 	}
 
 	// Case 2b: Working Tree Uncommitted Changes (--dirty)
@@ -208,7 +221,12 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 			CreatedAt:   time.Now(),
 		}
 
-		return b.buildContext(meta, workingChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
+		prior, pErr := b.loadPriorReview(opts, &effectiveCfgCopy, true, workingChanges)
+		if pErr != nil {
+			return nil, pErr
+		}
+
+		return b.buildContext(meta, workingChanges, userContextDocs, prior, &effectiveCfgCopy, activeConfigPaths...), nil
 	}
 
 	// Case 3: Local Git Repository Branch
@@ -342,11 +360,16 @@ func (b *Bundler) PrepareBundle(opts models.BundleOptions) (*models.PRContext, e
 		}
 	}
 
-	return b.buildContext(meta, fileChanges, userContextDocs, &effectiveCfgCopy, activeConfigPaths...), nil
+	prior, pErr := b.loadPriorReview(opts, &effectiveCfgCopy, true, fileChanges)
+	if pErr != nil {
+		return nil, pErr
+	}
+
+	return b.buildContext(meta, fileChanges, userContextDocs, prior, &effectiveCfgCopy, activeConfigPaths...), nil
 }
 
 // buildContext computes stats, applies custom filters, flags sensitive files, and builds PRContext.
-func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange, userContext []models.UserContextDoc, cfg *config.Config, activeConfigPaths ...string) *models.PRContext {
+func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChange, userContext []models.UserContextDoc, prior *priorReview, cfg *config.Config, activeConfigPaths ...string) *models.PRContext {
 	ctx := &models.PRContext{
 		Metadata:       *meta,
 		BundledAt:      time.Now(),
@@ -401,6 +424,26 @@ func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChang
 		}
 	}
 
+	if prior != nil {
+		for _, finding := range prior.findings {
+			finding.Touched = false
+			if !finding.PathRedacted {
+				matched, ambiguous := touchedFindingPath(finding.File, ctx.Files, files, prior.repoRoot, meta.HeadCommit)
+				finding.PathAmbiguous = ambiguous
+				if matched != "" {
+					finding.File = matched
+					finding.Touched = true
+				}
+			}
+			ctx.PriorFindings = append(ctx.PriorFindings, finding)
+		}
+		ctx.PriorFindingsOmitted = prior.omitted
+		ctx.PriorReviewPRMismatch = priorPRMismatch(prior.prURL, meta.URL)
+		if len(ctx.PriorFindings) > 0 {
+			ctx.PriorReviewPolicy = priorReviewPolicy()
+		}
+	}
+
 	ctx.ArchitectureDiagram = diagram.GenerateMermaid(b.repoPath, ctx.Files)
 	ctx.FileWalkthroughs = output.GenerateWalkthroughFromFiles(ctx.Files)
 	if cfg.Review.MaxDiffLines > 0 {
@@ -410,9 +453,92 @@ func (b *Bundler) buildContext(meta *models.PRMetadata, files []models.FileChang
 	return ctx
 }
 
+func (b *Bundler) loadPriorReview(opts models.BundleOptions, cfg *config.Config, matchingCheckout bool, files []models.FileChange) (*priorReview, error) {
+	if strings.TrimSpace(opts.PriorPath) == "" {
+		return nil, nil
+	}
+	maxKB := 0
+	if cfg != nil {
+		maxKB = cfg.Context.MaxSizeKB
+	}
+	var repoRoot string
+	if matchingCheckout {
+		repoRoot, _ = b.gitRunner.GetRepoRoot()
+	}
+	return readPriorReview(opts.PriorPath, opts.RepoPath, repoRoot, maxKB, files)
+}
+
+func touchedFindingPath(findingFile string, reviewedFiles, allChanges []models.FileChange, repoRoot, commit string) (string, bool) {
+	exact := path.Clean(findingFile)
+	if !isRelativeGitPath(exact) {
+		return "", false
+	}
+	if pathInReviewedDiff(exact, reviewedFiles) {
+		return exact, false
+	}
+	alternate := path.Clean(strings.ReplaceAll(findingFile, `\`, "/"))
+	if alternate == exact || !isRelativeGitPath(alternate) || !pathInReviewedDiff(alternate, reviewedFiles) || pathInReviewedDiff(exact, allChanges) {
+		return "", false
+	}
+	// A Windows separator can also be a literal character in an unchanged Git filename.
+	if repoRoot == "" {
+		return "", true
+	}
+	exists, err := git.NewGitRunner(repoRoot).HasExactPath(commit, exact)
+	if err != nil || exists {
+		return "", err != nil
+	}
+	return alternate, false
+}
+
+func pathInReviewedDiff(file string, reviewedFiles []models.FileChange) bool {
+	for _, rf := range reviewedFiles {
+		if path.Clean(rf.Path) == file || (rf.OldPath != "" && path.Clean(rf.OldPath) == file) {
+			return true
+		}
+	}
+	return false
+}
+
 // ToJSON converts PRContext to indented JSON string.
 func (b *Bundler) ToJSON(ctx *models.PRContext) (string, error) {
-	bytes, err := json.MarshalIndent(ctx, "", "  ")
+	bundle := struct {
+		models.PRContext
+		PathEncoding string `json:"path_encoding,omitempty"`
+	}{PRContext: *ctx}
+	encodePath := func(name string) string {
+		// Reserve the leading quote so encoded and literal path values cannot collide.
+		if strings.HasPrefix(name, `"`) || !utf8.ValidString(name) {
+			bundle.PathEncoding = "go-quoted"
+			return strconv.Quote(name)
+		}
+		return name
+	}
+	bundle.Files = slices.Clone(ctx.Files)
+	for i := range bundle.Files {
+		file := &bundle.Files[i]
+		file.Path = encodePath(file.Path)
+		file.OldPath = encodePath(file.OldPath)
+	}
+	bundle.FileWalkthroughs = slices.Clone(ctx.FileWalkthroughs)
+	for i := range bundle.FileWalkthroughs {
+		bundle.FileWalkthroughs[i].File = encodePath(bundle.FileWalkthroughs[i].File)
+	}
+	bundle.IgnoredFiles = slices.Clone(ctx.IgnoredFiles)
+	for i, file := range bundle.IgnoredFiles {
+		bundle.IgnoredFiles[i] = encodePath(file)
+	}
+	bundle.SensitiveFiles = slices.Clone(ctx.SensitiveFiles)
+	for i, file := range bundle.SensitiveFiles {
+		bundle.SensitiveFiles[i] = encodePath(file)
+	}
+	bundle.PriorFindings = slices.Clone(ctx.PriorFindings)
+	for i := range bundle.PriorFindings {
+		bundle.PriorFindings[i].File = encodePath(bundle.PriorFindings[i].File)
+	}
+	bundle.ModifiedConfigFile = encodePath(ctx.ModifiedConfigFile)
+
+	bytes, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -448,14 +574,14 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		fmt.Fprintf(&sb, "> **Security Sensitive Paths Touched (%d files):**\n", len(ctx.SensitiveFiles))
 		sb.WriteString("> Reviewers must pay extra attention to security, authorization, and data integrity for:\n")
 		for _, s := range ctx.SensitiveFiles {
-			fmt.Fprintf(&sb, "> - `%s`\n", s)
+			fmt.Fprintf(&sb, "> - %s\n", output.MarkdownPath(s))
 		}
 		sb.WriteString("\n")
 	}
 
 	if ctx.ModifiedConfigFile != "" {
 		sb.WriteString("> [!CAUTION]\n")
-		fmt.Fprintf(&sb, "> Configuration file `%s` was modified in this change. Review config edits carefully to ensure team rules were not weakened (base-revision rules apply by default unless `--config` is passed).\n\n", ctx.ModifiedConfigFile)
+		fmt.Fprintf(&sb, "> Configuration file %s was modified in this change. Review config edits carefully to ensure team rules were not weakened (base-revision rules apply by default unless `--config` is passed).\n\n", output.MarkdownPath(ctx.ModifiedConfigFile))
 	}
 
 	if len(ctx.CustomRules) > 0 || len(ctx.ForbiddenRules) > 0 || len(ctx.MandatedRules) > 0 {
@@ -495,6 +621,59 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 			}
 		}
 		sb.WriteString("\n")
+	}
+
+	if ctx.PriorReviewPRMismatch {
+		sb.WriteString("> [!CAUTION]\n")
+		sb.WriteString("> The prior report identifies a different pull request. Verify that its findings apply before re-checking them.\n\n")
+	}
+	if len(ctx.PriorFindings) > 0 {
+		policy := ctx.PriorReviewPolicy
+		if policy == nil {
+			policy = priorReviewPolicy()
+		}
+		sb.WriteString("## 🔄 Prior Review Findings (iteration re-check)\n\n")
+		sb.WriteString("> [!NOTE]\n")
+		guidance := policy.StatusGuidance
+		for _, status := range policy.Statuses {
+			guidance = strings.ReplaceAll(guidance, status, "`"+status+"`")
+		}
+		fmt.Fprintf(&sb, "> %s\n> %s\n> %s\n", policy.Instructions, guidance, policy.TouchedMeaning)
+		if ctx.PriorFindingsOmitted > 0 {
+			fmt.Fprintf(&sb, "> %d additional prior findings were omitted by the %d-finding limit. Review them separately.\n", ctx.PriorFindingsOmitted, MaxPriorFindings)
+		}
+		sb.WriteString("\n| ID | Severity | Location | Finding | Description | File touched in this diff |\n")
+		sb.WriteString("|----|----------|----------|---------|-------------|---------------------------|\n")
+		for _, pf := range ctx.PriorFindings {
+			loc := pf.File
+			if loc != strings.Join(strings.Fields(loc), " ") {
+				loc = strconv.Quote(loc)
+			}
+			if pf.Line > 0 {
+				loc = fmt.Sprintf("%s:%d", loc, pf.Line)
+			}
+			if pf.PathRedacted || pf.PathAmbiguous {
+				loc += " (unresolved)"
+			}
+			touchedStr := "no"
+			if pf.Touched {
+				touchedStr = "yes"
+			}
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+				priorTableCell(pf.ID), priorTableCell(pf.Severity), priorCellEscaper.Replace(loc),
+				priorTableCell(pf.Title), priorTableCell(pf.Description), touchedStr)
+		}
+		sb.WriteString("\n")
+		for _, pf := range ctx.PriorFindings {
+			if strings.TrimSpace(pf.Evidence) != "" {
+				fmt.Fprintf(&sb, "**%s evidence**\n\n", priorTableCell(pf.ID))
+				sb.WriteString(output.MarkdownLiteralBlock(pf.Evidence) + "\n")
+			}
+			if pf.Suggestion != "" {
+				fmt.Fprintf(&sb, "**%s suggested replacement**\n\n", priorTableCell(pf.ID))
+				sb.WriteString(output.MarkdownLiteralBlock(pf.Suggestion) + "\n")
+			}
+		}
 	}
 
 	sb.WriteString("## PR Description / Intent\n")
@@ -549,7 +728,7 @@ func (b *Bundler) ToMarkdown(ctx *models.PRContext) string {
 		if file.IsTruncated {
 			badges += " ✂️ `[TRUNCATED]`"
 		}
-		fmt.Fprintf(&sb, "### File: `%s` `(+%d / -%d)`%s\n\n", file.Path, file.Additions, file.Deletions, badges)
+		fmt.Fprintf(&sb, "### File: %s `(+%d / -%d)`%s\n\n", output.MarkdownPath(file.Path), file.Additions, file.Deletions, badges)
 		sb.WriteString("```diff\n")
 		sb.WriteString(file.DiffHunk)
 		sb.WriteString("\n```\n\n")

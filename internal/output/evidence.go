@@ -96,8 +96,16 @@ func formatEvidenceSection(evidence string) string {
 	if isSingleEnclosingFence(body) {
 		return "**Evidence:**\n\n" + body + "\n\n"
 	}
-	fence := backtickFenceFor(body, 3)
-	return "**Evidence:**\n\n" + fence + "text\n" + body + "\n" + fence + "\n\n"
+	return "**Evidence:**\n\n" + MarkdownLiteralBlock(body) + "\n"
+}
+
+// MarkdownLiteralBlock wraps text in a fence that cannot be closed by the text itself.
+func MarkdownLiteralBlock(text string) string {
+	fence := backtickFenceFor(text, 3)
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return fence + "text\n" + text + fence + "\n"
 }
 
 func hasConcreteEvidence(evidence string) bool {

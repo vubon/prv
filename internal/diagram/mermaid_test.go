@@ -212,3 +212,34 @@ func TestGenerateMermaid_EmptyFiles(t *testing.T) {
 		t.Errorf("expected empty string for filtered files, got %q", got)
 	}
 }
+
+func TestUnrepresentableGitPathUsesOnlyDiffImports(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.org/app\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "pkg"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "app.go"), []byte("package pkg\nimport \"example.org/app/disk\""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pkg/./app.go", `pkg/a\b.go`} {
+		if _, err := filepath.Localize(name); err == nil {
+			continue // A literal backslash is representable on POSIX.
+		}
+		g := BuildGraph(root, []models.FileChange{{Path: name, DiffHunk: "+import \"example.org/app/diff\""}})
+		if _, ok := g.Edges["pkg->diff"]; !ok || len(g.Edges) != 1 {
+			t.Errorf("for %q got edges %v, want only the diff import", name, g.Edges)
+		}
+	}
+}
+
+func TestDiagramEscapesPackageName(t *testing.T) {
+	g := NewGraph()
+	g.AddEdge("pkg/\"\nlabel", "dependency")
+	diagram := g.ToMermaid()
+	if strings.Contains(diagram, "\"\nlabel") || !strings.Contains(diagram, "#34;#10;label") {
+		t.Errorf("unexpected label or identifier: %s", diagram)
+	}
+}

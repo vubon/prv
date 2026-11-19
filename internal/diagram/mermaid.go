@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -94,7 +96,7 @@ func (g *Graph) ToMermaid() string {
 	// Render node labels
 	for _, k := range nodeKeys {
 		node := g.Nodes[k]
-		fmt.Fprintf(&sb, "    %s[\"%s\"]\n", node.ID, node.Package)
+		fmt.Fprintf(&sb, "    %s[\"%s\"]\n", node.ID, mermaidLabel(node.Package))
 	}
 
 	sb.WriteString("\n")
@@ -131,8 +133,26 @@ func (g *Graph) ToMermaid() string {
 	return sb.String()
 }
 
+// Mermaid accepts decimal character entities inside quoted labels.
+func mermaidLabel(pkg string) string {
+	var label strings.Builder
+	for _, r := range pkg {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/_-@. ", r) {
+			label.WriteRune(r)
+		} else {
+			fmt.Fprintf(&label, "#%d;", r)
+		}
+	}
+	return label.String()
+}
+
+var unsafeID = regexp.MustCompile(`[^A-Za-z0-9_/.@-]`)
+
 // SanitizeID converts package paths into valid Mermaid node identifiers.
 func SanitizeID(pkg string) string {
+	if unsafeID.MatchString(pkg) {
+		return fmt.Sprintf("pkg_%x", pkg)
+	}
 	cleaned := strings.ReplaceAll(pkg, "/", "_")
 	cleaned = strings.ReplaceAll(cleaned, "-", "_")
 	cleaned = strings.ReplaceAll(cleaned, ".", "_")
@@ -147,7 +167,7 @@ func SanitizeID(pkg string) string {
 }
 
 func normalizePackage(pkg string) string {
-	pkg = filepath.ToSlash(filepath.Clean(pkg))
+	pkg = path.Clean(pkg)
 	pkg = strings.TrimPrefix(pkg, "./")
 	pkg = strings.Trim(pkg, "/")
 	return pkg
@@ -203,7 +223,7 @@ func BuildGraph(repoPath string, files []models.FileChange) *Graph {
 		if f.IsFiltered {
 			continue
 		}
-		dir := filepath.ToSlash(filepath.Dir(f.Path))
+		dir := path.Dir(f.Path)
 		if dir == "." || dir == "" {
 			continue
 		}
@@ -227,54 +247,56 @@ func BuildGraph(repoPath string, files []models.FileChange) *Graph {
 }
 
 func parseGoImports(repoPath string, files []models.FileChange, touchedPkgs map[string]bool, modulePath string, g *Graph) {
-	fset := token.NewFileSet()
-
-	// Parse imports for all modified Go files
-	for _, f := range files {
-		if f.IsFiltered || !strings.HasSuffix(f.Path, ".go") {
-			continue
+	root, _ := os.OpenRoot(repoPath)
+	if root != nil {
+		defer func() { _ = root.Close() }()
+	}
+	localPackages := make(map[string]string)
+	parseLocal := func(localPath, pkg string) bool {
+		file, err := root.Open(localPath)
+		if err != nil {
+			return false
 		}
-
-		srcPkg := filepath.ToSlash(filepath.Dir(f.Path))
-		fullPath := filepath.Join(repoPath, f.Path)
-
-		// Parse AST on disk if file exists
-		if _, err := os.Stat(fullPath); err == nil {
-			node, parseErr := parser.ParseFile(fset, fullPath, nil, parser.ImportsOnly)
-			if parseErr == nil && node != nil {
-				for _, imp := range node.Imports {
-					importPath := strings.Trim(imp.Path.Value, `"`)
-					processGoImport(importPath, modulePath, srcPkg, touchedPkgs, g)
-				}
-				continue
-			}
+		defer func() { _ = file.Close() }()
+		node, err := parser.ParseFile(token.NewFileSet(), localPath, file, parser.ImportsOnly)
+		if err != nil {
+			return false
 		}
-
-		// Fallback: parse import lines from diff hunk if file not on disk (e.g. remote PR)
-		if f.DiffHunk != "" {
-			parseImportsFromDiff(f.DiffHunk, modulePath, srcPkg, touchedPkgs, g)
+		for _, imp := range node.Imports {
+			processGoImport(strings.Trim(imp.Path.Value, `"`), modulePath, pkg, touchedPkgs, g)
 		}
+		return true
 	}
 
-	// Also inspect other Go files in the touched package directories to detect package-level relationships
-	for pkg := range touchedPkgs {
-		pkgDir := filepath.Join(repoPath, pkg)
-		entries, err := os.ReadDir(pkgDir)
+	for _, f := range files {
+		if f.IsFiltered {
+			continue
+		}
+		srcPkg := path.Dir(f.Path)
+		// Validate the full Git path before deriving any host filesystem path.
+		local, err := filepath.Localize(f.Path)
+		onDisk := root != nil && err == nil
+		if onDisk && touchedPkgs[srcPkg] {
+			localPackages[srcPkg] = filepath.Dir(local)
+		}
+		if !strings.HasSuffix(f.Path, ".go") {
+			continue
+		}
+		if onDisk && parseLocal(local, srcPkg) {
+			continue
+		}
+		parseImportsFromDiff(f.DiffHunk, modulePath, srcPkg, touchedPkgs, g)
+	}
+
+	// Include imports from unchanged files in representable package directories.
+	for pkg, dir := range localPackages {
+		entries, err := fs.ReadDir(root.FS(), pkg)
 		if err != nil {
 			continue
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			filePath := filepath.Join(pkgDir, entry.Name())
-			node, parseErr := parser.ParseFile(fset, filePath, nil, parser.ImportsOnly)
-			if parseErr != nil || node == nil {
-				continue
-			}
-			for _, imp := range node.Imports {
-				importPath := strings.Trim(imp.Path.Value, `"`)
-				processGoImport(importPath, modulePath, pkg, touchedPkgs, g)
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") && !strings.HasSuffix(entry.Name(), "_test.go") {
+				parseLocal(filepath.Join(dir, entry.Name()), pkg)
 			}
 		}
 	}
@@ -327,8 +349,8 @@ func parsePolyglotImports(repoPath string, files []models.FileChange, touchedPkg
 		if f.IsFiltered {
 			continue
 		}
-		srcPkg := filepath.ToSlash(filepath.Dir(f.Path))
-		ext := strings.ToLower(filepath.Ext(f.Path))
+		srcPkg := path.Dir(f.Path)
+		ext := strings.ToLower(path.Ext(f.Path))
 
 		switch ext {
 		case ".ts", ".tsx", ".js", ".jsx":
@@ -339,8 +361,8 @@ func parsePolyglotImports(repoPath string, files []models.FileChange, touchedPkg
 				if len(matches) > 1 {
 					targetRaw := matches[1]
 					if strings.HasPrefix(targetRaw, ".") {
-						resolved := filepath.ToSlash(filepath.Clean(filepath.Join(srcPkg, targetRaw)))
-						resolvedDir := filepath.Dir(resolved)
+						resolved := path.Join(srcPkg, targetRaw)
+						resolvedDir := path.Dir(resolved)
 						if resolvedDir != "." && resolvedDir != srcPkg {
 							g.AddNode(resolvedDir, touchedPkgs[resolvedDir])
 							g.AddEdge(srcPkg, resolvedDir)

@@ -23,6 +23,10 @@ func TestMain(m *testing.M) {
 	if log := os.Getenv("PRV_TEST_POST_LOG"); executable == "gh" && log != "" {
 		os.Exit(runReportGitHubCLIFake(os.Args[1:], log))
 	}
+	if os.Getenv("PRV_TEST_RUN_CLI") == "1" {
+		main()
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -350,6 +354,52 @@ func TestBundleFlags_PriorFlag(t *testing.T) {
 	_ = parseFlagsAndPositionals(fs2, []string{"-P", "reviews/old.json"})
 	if priorPath2 != "reviews/old.json" {
 		t.Errorf("expected priorPath='reviews/old.json' from -P, got %q", priorPath2)
+	}
+}
+
+func TestBundle_PersonaOverride(t *testing.T) {
+	repo := t.TempDir()
+	mustGitCmd(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, ".prv.yaml"), []byte("review:\n  persona: |\n    mentor\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustGitCmd(t, repo, "add", ".prv.yaml")
+	mustGitCmd(t, repo, "-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-m", "configure persona")
+	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("staged change\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustGitCmd(t, repo, "add", "change.txt")
+
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runBundleJSON := func(args ...string) models.PRContext {
+		t.Helper()
+		cmd := exec.Command(executable, append([]string{"bundle", "--repo", repo, "--staged", "--json"}, args...)...)
+		cmd.Env = append(os.Environ(), "PRV_TEST_RUN_CLI=1")
+		data, err := cmd.Output()
+		if err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				t.Fatalf("bundle exited with %v: %s", err, exitErr.Stderr)
+			}
+			t.Fatal(err)
+		}
+		var bundle models.PRContext
+		if err := json.Unmarshal(data, &bundle); err != nil {
+			t.Fatalf("invalid bundle JSON: %v\n%s", err, data)
+		}
+		return bundle
+	}
+
+	configured := runBundleJSON()
+	if configured.Persona != "mentor\n" || configured.Instructions != "" {
+		t.Errorf("expected the original label-only persona, got %q with instructions %q", configured.Persona, configured.Instructions)
+	}
+	overridden := runBundleJSON("--persona", "staff-adversarial")
+	if overridden.Persona != "staff-adversarial" || !strings.Contains(overridden.Instructions, "Adversarial Review Posture") {
+		t.Errorf("expected adversarial persona and instructions, got %q with instructions %q", overridden.Persona, overridden.Instructions)
 	}
 }
 

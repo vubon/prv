@@ -24,7 +24,7 @@ type ContextConfig struct {
 
 // ReviewConfig contains rules, sensitive paths, persona, and strictness.
 type ReviewConfig struct {
-	Persona           string           `yaml:"persona"`                    // e.g. "staff-advisory", "strict-linter", "mentor"
+	Persona           string           `yaml:"persona"`                    // e.g. "staff-advisory" (default), "staff-adversarial", "strict-linter", "mentor"
 	DefaultBaseBranch string           `yaml:"default_base_branch"`        // e.g. "main", "staging", "dev", "develop"
 	MaxDiffLines      int              `yaml:"max_diff_lines,omitempty"`   // Optional diff line budget cap (0 = unlimited)
 	RequireEvidence   bool             `yaml:"require_evidence,omitempty"` // Fail prv report when BLOCKING issues omit evidence
@@ -268,7 +268,7 @@ context:
   max_size_kb: 256
 
 review:
-  # Review persona: "staff-advisory" (default) | "strict-linter" | "mentor"
+  # Review persona: "staff-advisory" (default) | "staff-adversarial" | "strict-linter" | "mentor"
   persona: "staff-advisory"
 
   # Default base branch to compare against (defaults to main/master if omitted)

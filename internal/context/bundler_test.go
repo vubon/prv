@@ -1844,3 +1844,132 @@ func TestBundleJSONPreservesNonUTF8PathBytes(t *testing.T) {
 		t.Fatal("JSON serialization changed paths in memory")
 	}
 }
+
+func TestBundler_PersonaStaffAdversarial_EmitsInstructions(t *testing.T) {
+	b := NewBundler(t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Review.Persona = "staff-adversarial"
+
+	ctx := b.buildContext(&models.PRMetadata{Title: "Adversarial Test"}, nil, nil, nil, cfg)
+	if ctx.Instructions == "" {
+		t.Fatal("expected non-empty instructions in PRContext for staff-adversarial")
+	}
+	if !strings.Contains(ctx.Instructions, "Adversarial Review Posture (Refute, Don't Confirm)") {
+		t.Errorf("expected adversarial posture text, got: %q", ctx.Instructions)
+	}
+
+	// In Markdown
+	md := b.ToMarkdown(ctx)
+	if !strings.Contains(md, "## 🛡️ Review Persona Instructions (`staff-adversarial`)") {
+		t.Errorf("expected persona instructions header in Markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "Adversarial Review Posture") {
+		t.Errorf("expected adversarial body in Markdown:\n%s", md)
+	}
+
+	// In JSON
+	jsonStr, err := b.ToJSON(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonStr, `"instructions":`) {
+		t.Errorf("expected instructions field in JSON bundle:\n%s", jsonStr)
+	}
+}
+
+func TestBundler_PersonaTrailingNewline_SingleLineHeading(t *testing.T) {
+	b := NewBundler(t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Review.Persona = "staff-adversarial\n" // simulate YAML literal block scalar '|'
+
+	ctx := b.buildContext(&models.PRMetadata{Title: "Trailing Newline Test"}, nil, nil, nil, cfg)
+	if ctx.Persona != "staff-adversarial" {
+		t.Errorf("expected trimmed persona in PRContext, got %q", ctx.Persona)
+	}
+
+	md := b.ToMarkdown(ctx)
+	if !strings.Contains(md, "## 🛡️ Review Persona Instructions (`staff-adversarial`)\n\n") {
+		t.Errorf("expected single-line persona instructions header in Markdown:\n%s", md)
+	}
+	if strings.Contains(md, "`staff-adversarial\n`") {
+		t.Errorf("detected broken multiline persona backtick fence:\n%s", md)
+	}
+}
+
+func TestBundler_PersonaDefault_StaffAdvisory_OmitsInstructions(t *testing.T) {
+	b := NewBundler(t.TempDir())
+	cfg := config.DefaultConfig() // default is staff-advisory
+
+	ctx := b.buildContext(&models.PRMetadata{Title: "Default Persona Test"}, nil, nil, nil, cfg)
+	if ctx.Instructions != "" {
+		t.Errorf("expected empty instructions for default staff-advisory, got: %q", ctx.Instructions)
+	}
+
+	md := b.ToMarkdown(ctx)
+	if strings.Contains(md, "Review Persona Instructions") {
+		t.Errorf("expected no persona instructions block in Markdown for default persona:\n%s", md)
+	}
+
+	jsonStr, err := b.ToJSON(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(jsonStr, `"instructions"`) {
+		t.Errorf("expected instructions field omitted from JSON for default persona:\n%s", jsonStr)
+	}
+}
+
+func TestBundler_CustomPersonaRendersAsOneCodeSpan(t *testing.T) {
+	b := NewBundler(t.TempDir())
+	for _, tc := range []struct {
+		label string
+		span  string
+	}{
+		{"Lead `Go` Reviewer", "`` Lead `Go` Reviewer ``"},
+		{"Lead `Go` Reviewer\nPlatform", "`` \"Lead `Go` Reviewer\\nPlatform\" ``"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			cfg := applyCLIOptions(config.DefaultConfig(), models.BundleOptions{PersonaOverride: tc.label})
+			ctx := b.buildContext(&models.PRMetadata{}, nil, nil, nil, &cfg)
+
+			want := "- **Review Persona:** " + tc.span + "\n"
+			if md := b.ToMarkdown(ctx); !strings.Contains(md, want) {
+				t.Errorf("expected a single Markdown metadata line %q, got:\n%s", want, md)
+			}
+
+			bundleJSON, err := b.ToJSON(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded models.PRContext
+			if err := json.Unmarshal([]byte(bundleJSON), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Persona != tc.label {
+				t.Errorf("expected JSON persona %q, got %q", tc.label, decoded.Persona)
+			}
+		})
+	}
+}
+
+func TestBundler_ApplyCLIOptions_PersonaOverride(t *testing.T) {
+	base := config.DefaultConfig()
+
+	// Normal override with whitespace trimming
+	opts := models.BundleOptions{
+		PersonaOverride: "  staff-adversarial  ",
+	}
+	applied := applyCLIOptions(base, opts)
+	if applied.Review.Persona != "staff-adversarial" {
+		t.Errorf("expected persona overridden to 'staff-adversarial', got %q", applied.Review.Persona)
+	}
+
+	// Blank or whitespace-only override must preserve base persona
+	blankOpts := models.BundleOptions{
+		PersonaOverride: "   ",
+	}
+	appliedBlank := applyCLIOptions(base, blankOpts)
+	if appliedBlank.Review.Persona != base.Review.Persona {
+		t.Errorf("expected whitespace-only persona to be ignored and preserve %q, got %q", base.Review.Persona, appliedBlank.Review.Persona)
+	}
+}

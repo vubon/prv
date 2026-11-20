@@ -47,6 +47,7 @@ Examples:
   prv bundle --pr 42 -c 42.md          # Review PR #42 with reviewer context
   prv bundle --pr 42 --max-lines 1500  # Cap bundle diff at 1,500 lines (risk-tiered)
   prv bundle --prior review.json       # Re-check findings from previous iteration
+  prv bundle --dirty --persona staff-adversarial # Opt-in to adversarial review posture
   prv bundle --pr https://github.com/owner/repo/pull/42 --json
   prv diagram --base staging           # Generate architecture diagram against staging
   prv diagram -B dev
@@ -188,7 +189,7 @@ func (s *stringSliceFlag) Set(val string) error {
 
 func runBundle(args []string) {
 	fs := flag.NewFlagSet("bundle", flag.ExitOnError)
-	var branch, base, prID, repoPath, outputFile, configPath, priorPath string
+	var branch, base, prID, repoPath, outputFile, configPath, priorPath, persona string
 	var formatJSON, includeLocks, staged, dirty bool
 	var maxLines int
 	var contextFiles stringSliceFlag
@@ -214,6 +215,8 @@ func runBundle(args []string) {
 
 	fs.StringVar(&priorPath, "prior", "", "Path to prior review JSON report for iteration re-check")
 	fs.StringVar(&priorPath, "P", "", "Alias for --prior")
+
+	fs.StringVar(&persona, "persona", "", "Override review persona (e.g. staff-advisory, staff-adversarial)")
 
 	fs.Var(&contextFiles, "context-file", "Path to markdown context/spec file (repeatable)")
 	fs.Var(&contextFiles, "c", "Alias for --context-file")
@@ -252,20 +255,26 @@ func runBundle(args []string) {
 		os.Exit(1)
 	}
 
+	persona = strings.TrimSpace(persona)
+	if persona != "" && !matrix.IsKnownPersona(persona) {
+		fmt.Fprintf(os.Stderr, "Warning: unknown review persona %q; treating as label\n", persona)
+	}
+
 	bundler := context.NewBundler(repoPath)
 	opts := models.BundleOptions{
-		Branch:       branch,
-		BaseBranch:   base,
-		PRIdentifier: prID,
-		RepoPath:     repoPath,
-		ConfigPath:   configPath,
-		Staged:       staged,
-		Dirty:        dirty,
-		FormatJSON:   formatJSON,
-		IncludeLocks: includeLocks,
-		MaxDiffLines: maxLines,
-		ContextFiles: contextFiles,
-		PriorPath:    priorPath,
+		Branch:          branch,
+		BaseBranch:      base,
+		PRIdentifier:    prID,
+		RepoPath:        repoPath,
+		ConfigPath:      configPath,
+		Staged:          staged,
+		Dirty:           dirty,
+		FormatJSON:      formatJSON,
+		IncludeLocks:    includeLocks,
+		MaxDiffLines:    maxLines,
+		ContextFiles:    contextFiles,
+		PriorPath:       priorPath,
+		PersonaOverride: persona,
 	}
 
 	bundleCtx, err := bundler.PrepareBundle(opts)
